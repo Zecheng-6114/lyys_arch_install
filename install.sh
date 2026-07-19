@@ -156,6 +156,27 @@ MAX_SWAP_MIB=16384
 
 echo "内存: ${TOTAL_MEM_MIB} MiB -> Swap: ${SWAP_MIB} MiB"
 
+# ===== 按磁盘大小配比 Root 分区 =====
+DISK_BYTES=$(lsblk -bdno SIZE "$DISK")
+DISK_MIB=$((DISK_BYTES / 1024 / 1024))
+EFI_MIB=1024
+
+# Root 取磁盘 25%，并限制在 [30G, 150G] 区间
+ROOT_MIB=$((DISK_MIB / 4))
+MIN_ROOT_MIB=30720
+MAX_ROOT_MIB=153600
+[ $ROOT_MIB -lt $MIN_ROOT_MIB ] && ROOT_MIB=$MIN_ROOT_MIB
+[ $ROOT_MIB -gt $MAX_ROOT_MIB ] && ROOT_MIB=$MAX_ROOT_MIB
+
+# 校验磁盘容量：EFI + Swap + Root 之外至少给 Home 预留 5G
+NEED_MIB=$((EFI_MIB + SWAP_MIB + ROOT_MIB + 5120))
+if [ $DISK_MIB -lt $NEED_MIB ]; then
+    echo "错误：磁盘容量不足（${DISK_MIB} MiB），至少需要 ${NEED_MIB} MiB。"
+    exit 1
+fi
+
+echo "磁盘: ${DISK_MIB} MiB -> Root: ${ROOT_MIB} MiB, Home: 剩余空间"
+
 # nvme/mmc/loop 等设备分区名带 p 前缀（如 nvme0n1p1），sd 等则直接跟数字（如 sda1）
 if [[ "$DISK" =~ (nvme|mmcblk|loop|nbd)[0-9]+$ ]]; then
     PART_PREFIX="${DISK}p"
@@ -188,39 +209,39 @@ echo "时钟同步完成"
 # ===== 分区与格式化 =====
 if [[ "$INSTALL_MODE" == "full" ]]; then
     echo ">>> 清除旧分区表..."
-    sgdisk -Z $DISK
+    sgdisk -Z "$DISK"
     echo "分区表已清除"
 
-    echo ">>> 创建 EFI 分区 (1G)..."
-    sgdisk -n 1::+1024M -t 1:ef00 -c 1:"EFI" $DISK
+    echo ">>> 创建 EFI 分区 (${EFI_MIB}M)..."
+    sgdisk -n 1::+${EFI_MIB}M -t 1:ef00 -c 1:"EFI" "$DISK"
     echo "EFI 分区已创建"
 
     echo ">>> 创建 Swap 分区 (${SWAP_MIB}M)..."
-    sgdisk -n 2::+${SWAP_MIB}M -t 2:8200 -c 2:"SWAP" $DISK
+    sgdisk -n 2::+${SWAP_MIB}M -t 2:8200 -c 2:"SWAP" "$DISK"
     echo "Swap 分区已创建"
 
-    echo ">>> 创建 Root 分区 (100G)..."
-    sgdisk -n 3::+102400M -t 3:8300 -c 3:"ROOT" $DISK
+    echo ">>> 创建 Root 分区 (${ROOT_MIB}M)..."
+    sgdisk -n 3::+${ROOT_MIB}M -t 3:8300 -c 3:"ROOT" "$DISK"
     echo "Root 分区已创建"
 
     echo ">>> 创建 Home 分区 (剩余空间)..."
-    sgdisk -n 4:0:0 -t 4:8300 -c 4:"HOME" $DISK
+    sgdisk -n 4:0:0 -t 4:8300 -c 4:"HOME" "$DISK"
     echo "Home 分区已创建"
 
     echo ">>> 格式化 EFI..."
-    mkfs.fat -F32 $PART_EFI
+    mkfs.fat -F32 "$PART_EFI"
     echo "EFI 格式化完成"
 
     echo ">>> 格式化 Swap..."
-    mkswap $PART_SWAP
+    mkswap "$PART_SWAP"
     echo "Swap 格式化完成"
 
     echo ">>> 格式化 Root..."
-    mkfs.ext4 -F $PART_ROOT
+    mkfs.ext4 -F "$PART_ROOT"
     echo "Root 格式化完成"
 
     echo ">>> 格式化 Home..."
-    mkfs.xfs -f $PART_HOME
+    mkfs.xfs -f "$PART_HOME"
     echo "Home 格式化完成"
 else
     echo ">>> 检查现有分区..."
@@ -250,21 +271,21 @@ else
     fi
 
     echo ">>> 格式化 EFI..."
-    mkfs.fat -F32 $PART_EFI
+    mkfs.fat -F32 "$PART_EFI"
     echo "EFI 格式化完成"
 
     echo ">>> 格式化 Swap..."
-    mkswap $PART_SWAP
+    mkswap "$PART_SWAP"
     echo "Swap 格式化完成"
 
     echo ">>> 格式化 Root..."
-    mkfs.ext4 -F $PART_ROOT
+    mkfs.ext4 -F "$PART_ROOT"
     echo "Root 格式化完成"
 fi
 
 # ===== 挂载 =====
 echo ">>> 挂载 Root 到 /mnt..."
-mount $PART_ROOT /mnt
+mount "$PART_ROOT" /mnt
 echo "Root 已挂载"
 
 echo ">>> 创建挂载点..."
@@ -272,15 +293,15 @@ mkdir -p /mnt/boot /mnt/home
 echo "挂载点已创建"
 
 echo ">>> 挂载 EFI 到 /mnt/boot..."
-mount $PART_EFI /mnt/boot
+mount "$PART_EFI" /mnt/boot
 echo "EFI 已挂载"
 
 echo ">>> 激活 Swap..."
-swapon $PART_SWAP
+swapon "$PART_SWAP"
 echo "Swap 已激活"
 
 echo ">>> 挂载 Home 到 /mnt/home..."
-mount $PART_HOME /mnt/home
+mount "$PART_HOME" /mnt/home
 echo "Home 已挂载"
 
 # ===== 镜像源 =====
@@ -319,7 +340,7 @@ echo "网络连通性正常"
 
 # ===== 安装基础系统 =====
 echo ">>> 开始安装基础系统，这可能需要几分钟..."
-pacstrap /mnt base linux linux-firmware base-devel vim networkmanager sudo xfsprogs grub efibootmgr git openssh $CPU_UCODE
+pacstrap /mnt base linux linux-firmware base-devel vim networkmanager sudo xfsprogs grub efibootmgr git openssh plymouth $CPU_UCODE
 echo "基础系统安装完成"
 
 # ===== fstab =====
@@ -403,6 +424,18 @@ echo ">>> 启用 SSH 服务..."
 systemctl enable sshd
 echo "SSH 服务已启用"
 
+echo ">>> 配置 Plymouth 启动动画..."
+# 添加 plymouth 钩子到 mkinitcpio（置于 udev 之后），避免重复添加
+if ! grep -q '\bplymouth\b' /etc/mkinitcpio.conf; then
+    sed -i '/^HOOKS=/s/\budev\b/udev plymouth/' /etc/mkinitcpio.conf
+fi
+# 为内核命令行添加 splash（GRUB 稍后据此生成配置），避免重复添加
+if ! grep -q 'splash' /etc/default/grub; then
+    sed -i '/^GRUB_CMDLINE_LINUX_DEFAULT=/s/"\(.*\)"/"\1 splash"/' /etc/default/grub
+fi
+mkinitcpio -P
+echo "Plymouth 配置完成"
+
 echo ">>> 安装 GRUB 引导..."
 grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id="GRUB"
 grub-mkconfig -o /boot/grub/grub.cfg
@@ -419,7 +452,7 @@ echo "临时脚本已清理"
 
 # ===== 卸载 =====
 echo ">>> 卸载分区..."
-swapoff $PART_SWAP
+swapoff "$PART_SWAP"
 echo "Swap 已关闭"
 umount -R /mnt
 echo "分区已卸载"
