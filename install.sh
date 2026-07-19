@@ -368,41 +368,6 @@ echo ">>> 开始安装基础系统，这可能需要几分钟..."
 pacstrap /mnt base linux linux-firmware base-devel vim networkmanager sudo xfsprogs grub efibootmgr git openssh curl plymouth fastfetch $CPU_UCODE
 echo "基础系统安装完成"
 
-# ===== GitHub520 hosts 加速 =====
-echo ">>> 下载 GitHub520 hosts 加速列表..."
-GITHUB520_URL="https://raw.fastgit.org/521xueweihan/GitHub520/main/hosts"
-HOSTS_FILE="/mnt/etc/hosts"
-HOSTS_TMP=$(mktemp)
-
-# 先下载到临时文件，仅在完全成功时才追加到 hosts，避免部分写入污染原文件
-# 这样即使下载过程中脚本被信号中断，原 hosts 文件也从未被修改
-GITHUB520_OK=""
-if command -v curl >/dev/null 2>&1; then
-    echo "使用 curl 下载..."
-    if curl -fsSL "$GITHUB520_URL" > "$HOSTS_TMP"; then
-        GITHUB520_OK="1"
-    else
-        echo "警告：curl 下载失败，GitHub 访问可能受限"
-    fi
-elif command -v wget >/dev/null 2>&1; then
-    echo "使用 wget 下载..."
-    if wget -qO- "$GITHUB520_URL" > "$HOSTS_TMP"; then
-        GITHUB520_OK="1"
-    else
-        echo "警告：wget 下载失败，GitHub 访问可能受限"
-    fi
-else
-    echo "警告：未找到 curl 或 wget，无法添加 GitHub520 hosts，GitHub 访问可能失败"
-fi
-
-# 只有下载完整成功才追加到原文件；失败时原文件保持不变
-if [ -n "$GITHUB520_OK" ]; then
-    cat "$HOSTS_TMP" >> "$HOSTS_FILE"
-    echo "GitHub520 hosts 已追加"
-fi
-rm -f "$HOSTS_TMP"
-echo "GitHub520 hosts 添加完成"
-
 # ===== fstab =====
 echo ">>> 生成 fstab..."
 genfstab -U /mnt > /mnt/etc/fstab
@@ -450,6 +415,90 @@ cat > /etc/hosts <<HOSTFILE
 127.0.1.1   ${HOSTNAME}.localdomain ${HOSTNAME}
 HOSTFILE
 echo "主机名配置完成"
+
+echo ">>> 配置 GitHub520 hosts 自动更新..."
+cat > /usr/local/bin/github520-update.sh <<'UPDATE_EOF'
+#!/bin/bash
+set -Eeo pipefail
+
+GITHUB520_URL="https://raw.fastgit.org/521xueweihan/GitHub520/main/hosts"
+HOSTS_FILE="/etc/hosts"
+HOSTS_TMP=$(mktemp)
+START_MARKER="# GITHUB520_START"
+END_MARKER="# GITHUB520_END"
+
+cleanup() {
+    rm -f "$HOSTS_TMP"
+}
+trap cleanup EXIT
+
+if command -v curl >/dev/null 2>&1; then
+    if ! curl -fsSL --max-time 30 "$GITHUB520_URL" > "$HOSTS_TMP"; then
+        echo "GitHub520 更新失败：curl 下载失败" >&2
+        exit 1
+    fi
+elif command -v wget >/dev/null 2>&1; then
+    if ! wget -qO- --timeout=30 "$GITHUB520_URL" > "$HOSTS_TMP"; then
+        echo "GitHub520 更新失败：wget 下载失败" >&2
+        exit 1
+    fi
+else
+    echo "GitHub520 更新失败：未找到 curl 或 wget" >&2
+    exit 1
+fi
+
+if [ ! -s "$HOSTS_TMP" ]; then
+    echo "GitHub520 更新失败：下载内容为空" >&2
+    exit 1
+fi
+
+# 移除旧的 GitHub520 段（如果存在），避免重复堆积
+# 使用 | 作为分隔符，避免标记值含 / 时导致 sed 语法错误
+if grep -qF "$START_MARKER" "$HOSTS_FILE"; then
+    sed -i "\|${START_MARKER}|,\|${END_MARKER}|d" "$HOSTS_FILE"
+fi
+
+# 追加新的 GitHub520 段（用标记包裹，便于下次更新时定位）
+{
+    echo "$START_MARKER"
+    cat "$HOSTS_TMP"
+    echo "$END_MARKER"
+} >> "$HOSTS_FILE"
+
+echo "GitHub520 hosts 更新完成（$(date)）"
+UPDATE_EOF
+chmod +x /usr/local/bin/github520-update.sh
+
+cat > /etc/systemd/system/github520-update.service <<'SERVICE_EOF'
+[Unit]
+Description=Update GitHub520 hosts
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/github520-update.sh
+SERVICE_EOF
+
+cat > /etc/systemd/system/github520-update.timer <<'TIMER_EOF'
+[Unit]
+Description=Run GitHub520 hosts update every hour
+
+[Timer]
+OnBootSec=5min
+OnCalendar=hourly
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+TIMER_EOF
+
+echo ">>> 首次运行 GitHub520 更新..."
+/usr/local/bin/github520-update.sh || echo "警告：GitHub520 首次更新失败，将在系统启动后由 timer 自动重试"
+
+echo ">>> 启用 GitHub520 定时更新..."
+systemctl enable github520-update.timer
+echo "GitHub520 定时更新已启用"
 
 echo ">>> 设置 root 密码..."
 printf '%s\n' "root:${ROOT_PASSWORD}" | chpasswd
