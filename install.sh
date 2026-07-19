@@ -44,7 +44,7 @@ if [ -n "$MISSING_TOOLS" ]; then
         echo "错误：未找到 pacman，无法自动安装，请手动安装后重试。"
         exit 1
     fi
-    read -p "是否现在用 pacman 安装这些软件包？[y/N]: " INSTALL_DEPS
+    read -p "是否现在用 pacman 安装这些软件包？[y/N]: " INSTALL_DEPS < /dev/tty
     if [[ "$INSTALL_DEPS" =~ ^[Yy]$ ]]; then
         pacman -Sy --needed --noconfirm $MISSING_PKGS
         for tool in $MISSING_TOOLS; do
@@ -67,24 +67,24 @@ lsblk -dpno NAME,SIZE,MODEL,TYPE | awk '$4=="disk"'
 echo ""
 
 DEFAULT_DISK=$(lsblk -dpno NAME,TYPE | awk '$2=="disk"{print $1; exit}')
-read -p "目标磁盘 [默认 ${DEFAULT_DISK}]: " DISK
+read -p "目标磁盘 [默认 ${DEFAULT_DISK}]: " DISK < /dev/tty
 DISK="${DISK:-$DEFAULT_DISK}"
 
-read -p "主机名 [默认 arch]: " HOSTNAME
+read -p "主机名 [默认 arch]: " HOSTNAME < /dev/tty
 HOSTNAME="${HOSTNAME:-arch}"
 
-read -p "用户名 [默认 user]: " USERNAME
+read -p "用户名 [默认 user]: " USERNAME < /dev/tty
 USERNAME="${USERNAME:-user}"
 
-read -p "时区 [默认 Asia/Shanghai]: " TIMEZONE
+read -p "时区 [默认 Asia/Shanghai]: " TIMEZONE < /dev/tty
 TIMEZONE="${TIMEZONE:-Asia/Shanghai}"
 
-read -p "语言环境 [默认 zh_CN.UTF-8]: " LOCALE
+read -p "语言环境 [默认 zh_CN.UTF-8]: " LOCALE < /dev/tty
 LOCALE="${LOCALE:-zh_CN.UTF-8}"
 
 while true; do
-    read -s -p "root 密码: " ROOT_PASSWORD; echo
-    read -s -p "确认 root 密码: " ROOT_PASSWORD_CONFIRM; echo
+    read -s -p "root 密码: " ROOT_PASSWORD < /dev/tty; echo
+    read -s -p "确认 root 密码: " ROOT_PASSWORD_CONFIRM < /dev/tty; echo
     if [ -z "$ROOT_PASSWORD" ]; then
         echo "密码不能为空，请重新输入。"
     elif [ "$ROOT_PASSWORD" != "$ROOT_PASSWORD_CONFIRM" ]; then
@@ -95,8 +95,8 @@ while true; do
 done
 
 while true; do
-    read -s -p "用户 ${USERNAME} 密码: " USER_PASSWORD; echo
-    read -s -p "确认用户密码: " USER_PASSWORD_CONFIRM; echo
+    read -s -p "用户 ${USERNAME} 密码: " USER_PASSWORD < /dev/tty; echo
+    read -s -p "确认用户密码: " USER_PASSWORD_CONFIRM < /dev/tty; echo
     if [ -z "$USER_PASSWORD" ]; then
         echo "密码不能为空，请重新输入。"
     elif [ "$USER_PASSWORD" != "$USER_PASSWORD_CONFIRM" ]; then
@@ -124,7 +124,7 @@ echo "UEFI 启动模式已确认"
 echo "选择安装模式："
 echo "1) 全新安装"
 echo "2) 仅重装 Root (保留 Home)"
-read -p "输入选项 [1/2]: " MODE_CHOICE
+read -p "输入选项 [1/2]: " MODE_CHOICE < /dev/tty
 
 if [[ "$MODE_CHOICE" == "1" ]]; then
     INSTALL_MODE="full"
@@ -195,7 +195,7 @@ else
     echo "警告：【仅重装 Root】将格式化 EFI/Swap/Root，保留 Home。"
 fi
 
-read -p "输入 'yes' 继续: " confirm
+read -p "输入 'yes' 继续: " confirm < /dev/tty
 if [[ "$confirm" != "yes" ]]; then
     echo "已取消。"
     exit 0
