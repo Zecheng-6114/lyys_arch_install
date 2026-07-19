@@ -2,6 +2,12 @@
 set -Eeo pipefail
 trap 'echo "错误：步骤失败（行 ${LINENO}）：${BASH_COMMAND}" >&2; exit 1' ERR
 
+# ===== Root 权限检查 =====
+if [ "$(id -u)" -ne 0 ]; then
+    echo "错误：请使用 root 权限运行此脚本（sudo $0）" >&2
+    exit 1
+fi
+
 # ===== 依赖工具检查 =====
 echo ">>> 检查依赖工具..."
 
@@ -43,6 +49,7 @@ if [ -n "$MISSING_TOOLS" ]; then
         echo "错误：未找到 pacman，无法自动安装，请手动安装后重试。"
         exit 1
     fi
+    echo ""
     read -p "是否现在用 pacman 安装这些软件包？[y/N]: " INSTALL_DEPS < /dev/tty
     if [[ "$INSTALL_DEPS" =~ ^[Yy]$ ]]; then
         pacman -Sy --needed --noconfirm $MISSING_PKGS
