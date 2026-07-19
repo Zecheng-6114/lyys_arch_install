@@ -3,8 +3,13 @@ set -Eeo pipefail
 trap 'echo "错误：步骤失败（行 ${LINENO}）：${BASH_COMMAND}" >&2; exit 1' ERR
 
 # ===== 配置变量（交互式输入，回车使用默认值） =====
-read -p "目标磁盘 [默认 /dev/nvme0n1]: " DISK
-DISK="${DISK:-/dev/nvme0n1}"
+echo ">>> 检测可用磁盘..."
+lsblk -dpno NAME,SIZE,MODEL,TYPE | awk '$4=="disk"'
+echo ""
+
+DEFAULT_DISK=$(lsblk -dpno NAME,TYPE | awk '$2=="disk"{print $1; exit}')
+read -p "目标磁盘 [默认 ${DEFAULT_DISK}]: " DISK
+DISK="${DISK:-$DEFAULT_DISK}"
 
 read -p "主机名 [默认 arch]: " HOSTNAME
 HOSTNAME="${HOSTNAME:-arch}"
@@ -92,10 +97,16 @@ MAX_SWAP_MIB=16384
 
 echo "内存: ${TOTAL_MEM_MIB} MiB -> Swap: ${SWAP_MIB} MiB"
 
-PART_EFI="${DISK}p1"
-PART_SWAP="${DISK}p2"
-PART_ROOT="${DISK}p3"
-PART_HOME="${DISK}p4"
+# nvme/mmc/loop 等设备分区名带 p 前缀（如 nvme0n1p1），sd 等则直接跟数字（如 sda1）
+if [[ "$DISK" =~ (nvme|mmcblk|loop|nbd)[0-9]+$ ]]; then
+    PART_PREFIX="${DISK}p"
+else
+    PART_PREFIX="${DISK}"
+fi
+PART_EFI="${PART_PREFIX}1"
+PART_SWAP="${PART_PREFIX}2"
+PART_ROOT="${PART_PREFIX}3"
+PART_HOME="${PART_PREFIX}4"
 
 # ===== 确认 =====
 if [[ "$INSTALL_MODE" == "full" ]]; then
