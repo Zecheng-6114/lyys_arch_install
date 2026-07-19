@@ -452,7 +452,7 @@ cat > /usr/local/bin/github520-update.sh <<'UPDATE_EOF'
 #!/bin/bash
 set -Eeo pipefail
 
-GITHUB520_URL="https://raw.fastgit.org/521xueweihan/GitHub520/main/hosts"
+GITHUB520_URL="https://raw.hellogithub.com/hosts"
 HOSTS_FILE="/etc/hosts"
 HOSTS_TMP=$(mktemp)
 START_MARKER="# GITHUB520_START"
