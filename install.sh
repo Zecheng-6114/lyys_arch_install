@@ -432,23 +432,30 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if command -v curl >/dev/null 2>&1; then
-    if ! curl -fsSL --max-time 30 "$GITHUB520_URL" > "$HOSTS_TMP"; then
-        echo "GitHub520 更新失败：curl 下载失败" >&2
+download_github520() {
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --max-time 30 "$GITHUB520_URL" > "$HOSTS_TMP"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO- --timeout=30 "$GITHUB520_URL" > "$HOSTS_TMP"
+    else
+        echo "GitHub520 更新失败：未找到 curl 或 wget" >&2
         exit 1
     fi
-elif command -v wget >/dev/null 2>&1; then
-    if ! wget -qO- --timeout=30 "$GITHUB520_URL" > "$HOSTS_TMP"; then
-        echo "GitHub520 更新失败：wget 下载失败" >&2
-        exit 1
+}
+
+MAX_RETRIES=3
+for attempt in $(seq 1 "$MAX_RETRIES"); do
+    if download_github520 && [ -s "$HOSTS_TMP" ]; then
+        break
     fi
-else
-    echo "GitHub520 更新失败：未找到 curl 或 wget" >&2
-    exit 1
-fi
+    echo "GitHub520 下载失败（第 ${attempt}/${MAX_RETRIES} 次）" >&2
+    if [ "$attempt" -lt "$MAX_RETRIES" ]; then
+        sleep 3
+    fi
+done
 
 if [ ! -s "$HOSTS_TMP" ]; then
-    echo "GitHub520 更新失败：下载内容为空" >&2
+    echo "GitHub520 更新失败：${MAX_RETRIES} 次尝试均失败" >&2
     exit 1
 fi
 
