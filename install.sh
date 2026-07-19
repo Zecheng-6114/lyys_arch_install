@@ -221,7 +221,7 @@ fi
 
 # ===== 安装基础系统 =====
 echo ">>> 开始安装基础系统，这可能需要几分钟..."
-pacstrap /mnt base linux linux-firmware base-devel vim networkmanager sudo xfsprogs grub efibootmgr $CPU_UCODE
+pacstrap /mnt base linux linux-firmware base-devel vim networkmanager sudo xfsprogs grub efibootmgr git openssh $CPU_UCODE
 echo "基础系统安装完成"
 
 # ===== fstab =====
@@ -288,6 +288,10 @@ echo "sudo 权限配置完成"
 echo ">>> 启用 NetworkManager..."
 systemctl enable NetworkManager
 echo "NetworkManager 已启用"
+
+echo ">>> 启用 SSH 服务..."
+systemctl enable sshd
+echo "SSH 服务已启用"
 
 echo ">>> 安装 GRUB 引导..."
 grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id="GRUB"
