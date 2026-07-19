@@ -4,7 +4,7 @@ trap 'echo "错误：步骤失败（行 ${LINENO}）：${BASH_COMMAND}" >&2; exi
 
 # ===== 依赖工具检查 =====
 echo ">>> 检查依赖工具..."
-REQUIRED_TOOLS="sgdisk mkfs.fat mkswap mkfs.ext4 mkfs.xfs mount umount swapon swapoff lsblk awk grep ping timedatectl pacstrap genfstab arch-chroot"
+REQUIRED_TOOLS="sgdisk mkfs.fat mkswap mkfs.ext4 mkfs.xfs mount umount swapon swapoff lsblk awk grep ping reflector timedatectl pacstrap genfstab arch-chroot"
 MISSING_TOOLS=""
 for tool in $REQUIRED_TOOLS; do
     if ! command -v "$tool" >/dev/null 2>&1; then
@@ -241,9 +241,9 @@ mount $PART_HOME /mnt/home
 echo "Home 已挂载"
 
 # ===== 镜像源 =====
-echo ">>> 配置镜像源..."
-echo "Server = https://mirrors.tuna.tsinghua.edu.cn/archlinux/\$repo/os/\$arch" > /etc/pacman.d/mirrorlist
-echo "Server = https://mirrors.ustc.edu.cn/archlinux/\$repo/os/\$arch" >> /etc/pacman.d/mirrorlist
+echo ">>> 使用 reflector 更新镜像源（按速度排序）..."
+cp /etc/pacman.d/mirrorlist "/etc/pacman.d/mirrorlist.bak.$$" 2>/dev/null || true
+reflector --country China --protocol https --latest 10 --sort rate --save /etc/pacman.d/mirrorlist
 echo "镜像源配置完成"
 
 # ===== 微码 =====
