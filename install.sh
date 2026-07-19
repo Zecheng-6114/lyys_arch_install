@@ -438,6 +438,15 @@ cat > /etc/hosts <<HOSTFILE
 HOSTFILE
 echo "主机名配置完成"
 
+echo ">>> 配置 archlinuxcn 软件源..."
+cat >> /etc/pacman.conf <<'CNREPO'
+
+[archlinuxcn]
+Server = https://mirrors.zju.edu.cn/archlinuxcn/$arch
+CNREPO
+pacman -Sy --noconfirm archlinux-keyring archlinuxcn-keyring
+echo "archlinuxcn 软件源配置完成"
+
 echo ">>> 配置 GitHub520 hosts 自动更新..."
 cat > /usr/local/bin/github520-update.sh <<'UPDATE_EOF'
 #!/bin/bash
@@ -656,6 +665,10 @@ rm -rf "$GRUB_THEME_SRC"
 
 grub-mkconfig -o /boot/grub/grub.cfg
 echo "GRUB 安装完成"
+
+echo ">>> 安装 paru (AUR 助手)..."
+pacman -S --noconfirm paru
+echo "paru 安装完成"
 INNER_EOF
 
 echo ">>> 进入 chroot 环境执行配置..."
