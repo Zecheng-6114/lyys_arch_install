@@ -450,60 +450,8 @@ echo "archlinuxcn 软件源配置完成"
 echo ">>> 配置 GitHub520 hosts 自动更新..."
 cat > /usr/local/bin/github520-update.sh <<'UPDATE_EOF'
 #!/bin/bash
-set -Eeo pipefail
-
-GITHUB520_URL="https://raw.hellogithub.com/hosts"
-HOSTS_FILE="/etc/hosts"
-HOSTS_TMP=$(mktemp)
-START_MARKER="# GITHUB520_START"
-END_MARKER="# GITHUB520_END"
-
-cleanup() {
-    rm -f "$HOSTS_TMP"
-}
-trap cleanup EXIT
-
-download_github520() {
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL --max-time 30 "$GITHUB520_URL" > "$HOSTS_TMP"
-    elif command -v wget >/dev/null 2>&1; then
-        wget -qO- --timeout=30 "$GITHUB520_URL" > "$HOSTS_TMP"
-    else
-        echo "GitHub520 更新失败：未找到 curl 或 wget" >&2
-        exit 1
-    fi
-}
-
-MAX_RETRIES=3
-for attempt in $(seq 1 "$MAX_RETRIES"); do
-    if download_github520 && [ -s "$HOSTS_TMP" ]; then
-        break
-    fi
-    echo "GitHub520 下载失败（第 ${attempt}/${MAX_RETRIES} 次）" >&2
-    if [ "$attempt" -lt "$MAX_RETRIES" ]; then
-        sleep 3
-    fi
-done
-
-if [ ! -s "$HOSTS_TMP" ]; then
-    echo "GitHub520 更新失败：${MAX_RETRIES} 次尝试均失败" >&2
-    exit 1
-fi
-
-# 移除旧的 GitHub520 段（如果存在），避免重复堆积
-# 使用 | 作为分隔符，避免标记值含 / 时导致 sed 语法错误
-if grep -qF "$START_MARKER" "$HOSTS_FILE"; then
-    sed -i "\|${START_MARKER}|,\|${END_MARKER}|d" "$HOSTS_FILE"
-fi
-
-# 追加新的 GitHub520 段（用标记包裹，便于下次更新时定位）
-{
-    echo "$START_MARKER"
-    cat "$HOSTS_TMP"
-    echo "$END_MARKER"
-} >> "$HOSTS_FILE"
-
-echo "GitHub520 hosts 更新完成（$(date)）"
+sed -i "/# GitHub520 Host Start/Q" /etc/hosts
+curl -fsSL https://raw.hellogithub.com/hosts >> /etc/hosts
 UPDATE_EOF
 chmod +x /usr/local/bin/github520-update.sh
 
