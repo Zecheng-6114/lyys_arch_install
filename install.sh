@@ -4,17 +4,60 @@ trap 'echo "错误：步骤失败（行 ${LINENO}）：${BASH_COMMAND}" >&2; exi
 
 # ===== 依赖工具检查 =====
 echo ">>> 检查依赖工具..."
+
+# 工具 -> 提供该工具的软件包
+tool_pkg() {
+    case "$1" in
+        sgdisk) echo "gptfdisk" ;;
+        mkfs.fat) echo "dosfstools" ;;
+        mkfs.ext4) echo "e2fsprogs" ;;
+        mkfs.xfs) echo "xfsprogs" ;;
+        mkswap|mount|umount|swapon|swapoff|lsblk) echo "util-linux" ;;
+        awk) echo "gawk" ;;
+        grep) echo "grep" ;;
+        ping) echo "iputils" ;;
+        reflector) echo "reflector" ;;
+        timedatectl) echo "systemd" ;;
+        pacstrap|genfstab|arch-chroot) echo "arch-install-scripts" ;;
+        *) echo "$1" ;;
+    esac
+}
+
 REQUIRED_TOOLS="sgdisk mkfs.fat mkswap mkfs.ext4 mkfs.xfs mount umount swapon swapoff lsblk awk grep ping reflector timedatectl pacstrap genfstab arch-chroot"
 MISSING_TOOLS=""
+MISSING_PKGS=""
 for tool in $REQUIRED_TOOLS; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         MISSING_TOOLS="${MISSING_TOOLS} ${tool}"
+        pkg=$(tool_pkg "$tool")
+        case " $MISSING_PKGS " in
+            *" $pkg "*) ;;
+            *) MISSING_PKGS="${MISSING_PKGS} ${pkg}" ;;
+        esac
     fi
 done
+
 if [ -n "$MISSING_TOOLS" ]; then
-    echo "错误：缺少以下依赖工具:${MISSING_TOOLS}"
-    echo "请在 Arch 安装环境中运行，或安装 gptfdisk/dosfstools/xfsprogs/arch-install-scripts 等对应软件包。"
-    exit 1
+    echo "缺少以下依赖工具:${MISSING_TOOLS}"
+    echo "对应软件包:${MISSING_PKGS}"
+    if ! command -v pacman >/dev/null 2>&1; then
+        echo "错误：未找到 pacman，无法自动安装，请手动安装后重试。"
+        exit 1
+    fi
+    read -p "是否现在用 pacman 安装这些软件包？[y/N]: " INSTALL_DEPS
+    if [[ "$INSTALL_DEPS" =~ ^[Yy]$ ]]; then
+        pacman -Sy --needed --noconfirm $MISSING_PKGS
+        for tool in $MISSING_TOOLS; do
+            if ! command -v "$tool" >/dev/null 2>&1; then
+                echo "错误：安装后仍缺少工具 ${tool}，请手动检查。"
+                exit 1
+            fi
+        done
+        echo "依赖工具安装完成"
+    else
+        echo "已取消，请手动安装依赖后重试。"
+        exit 1
+    fi
 fi
 echo "依赖工具检查通过"
 
@@ -286,13 +329,12 @@ echo "fstab 生成完成"
 
 # ===== chroot 配置脚本 =====
 echo ">>> 写入配置变量文件..."
+# 注意：密码不写入磁盘，稍后通过 stdin(here-doc) 传入 chroot
 {
     printf 'TIMEZONE=%q\n' "$TIMEZONE"
     printf 'LOCALE=%q\n' "$LOCALE"
     printf 'HOSTNAME=%q\n' "$HOSTNAME"
-    printf 'ROOT_PASSWORD=%q\n' "$ROOT_PASSWORD"
     printf 'USERNAME=%q\n' "$USERNAME"
-    printf 'USER_PASSWORD=%q\n' "$USER_PASSWORD"
 } > /mnt/root/config.env
 chmod 600 /mnt/root/config.env
 echo "配置变量文件已写入"
@@ -304,6 +346,10 @@ set -Eeo pipefail
 trap 'echo "错误：步骤失败（行 ${LINENO}）：${BASH_COMMAND}" >&2; exit 1' ERR
 
 source /root/config.env
+
+# 密码通过 stdin(here-doc) 传入，不落盘
+IFS= read -r ROOT_PASSWORD
+IFS= read -r USER_PASSWORD
 
 echo ">>> 配置时区..."
 ln -sf "/usr/share/zoneinfo/${TIMEZONE}" /etc/localtime
@@ -364,7 +410,7 @@ echo "GRUB 安装完成"
 INNER_EOF
 
 echo ">>> 进入 chroot 环境执行配置..."
-arch-chroot /mnt bash /root/config.sh
+printf '%s\n%s\n' "$ROOT_PASSWORD" "$USER_PASSWORD" | arch-chroot /mnt bash /root/config.sh
 echo "chroot 配置完成"
 
 echo ">>> 清理临时脚本..."
