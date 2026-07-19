@@ -319,30 +319,6 @@ echo ">>> 挂载 Home 到 /mnt/home..."
 mount "$PART_HOME" /mnt/home
 echo "Home 已挂载"
 
-# ===== GitHub520 hosts 加速（宿主环境下载，直接写入目标系统） =====
-echo ">>> 下载 GitHub520 hosts 加速列表..."
-GITHUB520_URL="https://raw.fastgit.org/521xueweihan/GitHub520/main/hosts"
-HOSTS_FILE="/mnt/etc/hosts"
-
-cp "$HOSTS_FILE" "${HOSTS_FILE}.bak.$$" 2>/dev/null || true
-
-if command -v curl >/dev/null 2>&1; then
-    echo "使用 curl 下载..."
-    curl -fsSL "$GITHUB520_URL" >> "$HOSTS_FILE" || {
-        echo "警告：curl 下载失败，GitHub 访问可能受限"
-        cp "${HOSTS_FILE}.bak.$$" "$HOSTS_FILE" 2>/dev/null || true
-    }
-elif command -v wget >/dev/null 2>&1; then
-    echo "使用 wget 下载..."
-    wget -qO- "$GITHUB520_URL" >> "$HOSTS_FILE" || {
-        echo "警告：wget 下载失败，GitHub 访问可能受限"
-        cp "${HOSTS_FILE}.bak.$$" "$HOSTS_FILE" 2>/dev/null || true
-    }
-else
-    echo "警告：未找到 curl 或 wget，无法添加 GitHub520 hosts，GitHub 访问可能失败"
-fi
-echo "GitHub520 hosts 添加完成"
-
 # ===== 镜像源 =====
 echo ">>> 使用 reflector 更新镜像源（按速度排序）..."
 echo "正在测试镜像下载速度，可能需要 1~2 分钟，请稍候..."
@@ -387,10 +363,45 @@ if [ -z "$NET_OK" ]; then
 fi
 echo "网络连通性正常"
 
-# ===== 安装基础系统（不包含 curl） =====
+# ===== 安装基础系统 =====
 echo ">>> 开始安装基础系统，这可能需要几分钟..."
-pacstrap /mnt base linux linux-firmware base-devel vim networkmanager sudo xfsprogs grub efibootmgr git openssh plymouth fastfetch $CPU_UCODE
+pacstrap /mnt base linux linux-firmware base-devel vim networkmanager sudo xfsprogs grub efibootmgr git openssh curl plymouth fastfetch $CPU_UCODE
 echo "基础系统安装完成"
+
+# ===== GitHub520 hosts 加速 =====
+echo ">>> 下载 GitHub520 hosts 加速列表..."
+GITHUB520_URL="https://raw.fastgit.org/521xueweihan/GitHub520/main/hosts"
+HOSTS_FILE="/mnt/etc/hosts"
+HOSTS_TMP=$(mktemp)
+
+# 先下载到临时文件，仅在完全成功时才追加到 hosts，避免部分写入污染原文件
+# 这样即使下载过程中脚本被信号中断，原 hosts 文件也从未被修改
+GITHUB520_OK=""
+if command -v curl >/dev/null 2>&1; then
+    echo "使用 curl 下载..."
+    if curl -fsSL "$GITHUB520_URL" > "$HOSTS_TMP"; then
+        GITHUB520_OK="1"
+    else
+        echo "警告：curl 下载失败，GitHub 访问可能受限"
+    fi
+elif command -v wget >/dev/null 2>&1; then
+    echo "使用 wget 下载..."
+    if wget -qO- "$GITHUB520_URL" > "$HOSTS_TMP"; then
+        GITHUB520_OK="1"
+    else
+        echo "警告：wget 下载失败，GitHub 访问可能受限"
+    fi
+else
+    echo "警告：未找到 curl 或 wget，无法添加 GitHub520 hosts，GitHub 访问可能失败"
+fi
+
+# 只有下载完整成功才追加到原文件；失败时原文件保持不变
+if [ -n "$GITHUB520_OK" ]; then
+    cat "$HOSTS_TMP" >> "$HOSTS_FILE"
+    echo "GitHub520 hosts 已追加"
+fi
+rm -f "$HOSTS_TMP"
+echo "GitHub520 hosts 添加完成"
 
 # ===== fstab =====
 echo ">>> 生成 fstab..."
@@ -495,9 +506,10 @@ if ! grep -q 'splash' /etc/default/grub; then
     sed -i '/^GRUB_CMDLINE_LINUX_DEFAULT=/s/"\(.*\)"/"\1 splash"/' /etc/default/grub
 fi
 
-echo ">>> 安装 Plymouth 主题 arch-logo-symbol..."
-PLYMOUTH_THEME_REPO="https://github.com/mfinelli/plymouth-theme-arch-logo-symbol.git"
-THEME_SRC="/tmp/plymouth-theme-arch-logo-symbol"
+echo ">>> 安装 Plymouth 主题 catppuccin..."
+PLYMOUTH_THEME_REPO="https://github.com/catppuccin/plymouth.git"
+THEME_SRC="/tmp/catppuccin-plymouth"
+PLYMOUTH_FLAVOR="mocha"
 FALLBACK_THEME="bgrt"
 
 install_custom_theme() {
@@ -512,8 +524,8 @@ install_custom_theme() {
     [ -d "$THEME_SRC" ] || return 1
 
     local theme_plymouth theme_name
-    theme_plymouth=$(find "$THEME_SRC" -name '*.plymouth' | head -n1)
-    [ -n "$theme_plymouth" ] || { echo "仓库中未找到 .plymouth 文件"; return 1; }
+    theme_plymouth=$(find "$THEME_SRC" -name "*${PLYMOUTH_FLAVOR}*.plymouth" | head -n1)
+    [ -n "$theme_plymouth" ] || { echo "仓库中未找到 ${PLYMOUTH_FLAVOR} 风味的 .plymouth 文件"; return 1; }
     theme_name=$(basename "$theme_plymouth" .plymouth)
 
     if [ -f "${THEME_SRC}/Makefile" ]; then
@@ -540,6 +552,30 @@ echo "Plymouth 配置完成"
 
 echo ">>> 安装 GRUB 引导..."
 grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id="GRUB"
+
+echo ">>> 安装 GRUB 主题 catppuccin..."
+GRUB_THEME_REPO="https://github.com/catppuccin/grub.git"
+GRUB_THEME_SRC="/tmp/catppuccin-grub"
+GRUB_THEME_FLAVOR="mocha"
+
+rm -rf "$GRUB_THEME_SRC"
+if git clone --depth 1 "$GRUB_THEME_REPO" "$GRUB_THEME_SRC"; then
+    GRUB_THEME_DIR=$(find "$GRUB_THEME_SRC/src" -maxdepth 1 -type d -name "*${GRUB_THEME_FLAVOR}*" | head -n1)
+    if [ -n "$GRUB_THEME_DIR" ] && [ -f "$GRUB_THEME_DIR/theme.txt" ]; then
+        install -d /usr/share/grub/themes
+        cp -r "$GRUB_THEME_DIR" /usr/share/grub/themes/
+        THEME_DIR_NAME=$(basename "$GRUB_THEME_DIR")
+        sed -i '/^GRUB_THEME=/d' /etc/default/grub
+        echo "GRUB_THEME=\"/usr/share/grub/themes/${THEME_DIR_NAME}/theme.txt\"" >> /etc/default/grub
+        echo "GRUB 主题 catppuccin-${GRUB_THEME_FLAVOR} 已设为默认"
+    else
+        echo "警告：未找到 catppuccin GRUB 主题文件，跳过。"
+    fi
+else
+    echo "警告：克隆 catppuccin/grub 失败，跳过 GRUB 主题安装。"
+fi
+rm -rf "$GRUB_THEME_SRC"
+
 grub-mkconfig -o /boot/grub/grub.cfg
 echo "GRUB 安装完成"
 INNER_EOF
