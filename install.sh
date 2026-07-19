@@ -327,7 +327,7 @@ cp /etc/pacman.d/mirrorlist "/etc/pacman.d/mirrorlist.bak.$$" 2>/dev/null || tru
 reflector \
     --country China \
     --protocol https \
-    --latest 10 \
+    --latest 5 \
     --sort rate \
     --save /etc/pacman.d/mirrorlist \
     --verbose \
