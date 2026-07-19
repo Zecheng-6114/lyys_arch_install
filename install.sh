@@ -340,7 +340,7 @@ echo "网络连通性正常"
 
 # ===== 安装基础系统 =====
 echo ">>> 开始安装基础系统，这可能需要几分钟..."
-pacstrap /mnt base linux linux-firmware base-devel vim networkmanager sudo xfsprogs grub efibootmgr git openssh plymouth $CPU_UCODE
+pacstrap /mnt base linux linux-firmware base-devel vim networkmanager sudo xfsprogs grub efibootmgr git openssh plymouth fastfetch $CPU_UCODE
 echo "基础系统安装完成"
 
 # ===== fstab =====
@@ -410,6 +410,14 @@ else
 fi
 printf '%s\n' "${USERNAME}:${USER_PASSWORD}" | chpasswd
 echo "用户 ${USERNAME} 创建完成"
+
+echo ">>> 配置登录时运行 fastfetch..."
+USER_BASHRC="/home/${USERNAME}/.bashrc"
+if ! grep -qx 'fastfetch' "$USER_BASHRC" 2>/dev/null; then
+    echo 'fastfetch' >> "$USER_BASHRC"
+fi
+chown "${USERNAME}:${USERNAME}" "$USER_BASHRC"
+echo "fastfetch 已配置"
 
 echo ">>> 配置 sudo 权限..."
 echo '%wheel ALL=(ALL:ALL) ALL' > /etc/sudoers.d/99-wheel
