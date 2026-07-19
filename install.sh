@@ -5,7 +5,6 @@ trap 'echo "错误：步骤失败（行 ${LINENO}）：${BASH_COMMAND}" >&2; exi
 # ===== 依赖工具检查 =====
 echo ">>> 检查依赖工具..."
 
-# 工具 -> 提供该工具的软件包
 tool_pkg() {
     case "$1" in
         sgdisk) echo "gptfdisk" ;;
@@ -63,7 +62,16 @@ echo "依赖工具检查通过"
 
 # ===== 配置变量（交互式输入，回车使用默认值） =====
 echo ">>> 检测可用磁盘..."
-lsblk -dpno NAME,SIZE,MODEL,TYPE | awk '$4=="disk"'
+DISK_LIST=$(timeout 10 lsblk -dpno NAME,SIZE,MODEL,TYPE 2>/dev/null)
+if [ -z "$DISK_LIST" ]; then
+    echo "警告：lsblk 未能正常返回磁盘列表，尝试简化检测..."
+    DISK_LIST=$(lsblk -dpno NAME,TYPE 2>/dev/null | grep disk || echo "")
+    if [ -z "$DISK_LIST" ]; then
+        echo "错误：无法获取磁盘列表，请检查系统存储设备。"
+        exit 1
+    fi
+fi
+echo "$DISK_LIST"
 echo ""
 
 DEFAULT_DISK=$(lsblk -dpno NAME,TYPE | awk '$2=="disk"{print $1; exit}')
@@ -177,12 +185,13 @@ fi
 
 echo "磁盘: ${DISK_MIB} MiB -> Root: ${ROOT_MIB} MiB, Home: 剩余空间"
 
-# nvme/mmc/loop 等设备分区名带 p 前缀（如 nvme0n1p1），sd 等则直接跟数字（如 sda1）
-if [[ "$DISK" =~ (nvme|mmcblk|loop|nbd)[0-9]+$ ]]; then
+# ---- 分区前缀判断（修复） ----
+if [[ "${DISK: -1}" =~ [0-9] ]]; then
     PART_PREFIX="${DISK}p"
 else
     PART_PREFIX="${DISK}"
 fi
+
 PART_EFI="${PART_PREFIX}1"
 PART_SWAP="${PART_PREFIX}2"
 PART_ROOT="${PART_PREFIX}3"
@@ -200,6 +209,12 @@ if [[ "$confirm" != "yes" ]]; then
     echo "已取消。"
     exit 0
 fi
+
+# ===== 主动预防：卸载可能残留的旧挂载 =====
+echo ">>> 清理旧的挂载和 Swap 激活..."
+umount -R /mnt 2>/dev/null || true
+swapoff "${PART_SWAP}" 2>/dev/null || true
+echo "清理完成"
 
 # ===== 时钟 =====
 echo ">>> 同步系统时钟..."
@@ -304,10 +319,44 @@ echo ">>> 挂载 Home 到 /mnt/home..."
 mount "$PART_HOME" /mnt/home
 echo "Home 已挂载"
 
+# ===== GitHub520 hosts 加速（宿主环境下载，直接写入目标系统） =====
+echo ">>> 下载 GitHub520 hosts 加速列表..."
+GITHUB520_URL="https://raw.fastgit.org/521xueweihan/GitHub520/main/hosts"
+HOSTS_FILE="/mnt/etc/hosts"
+
+cp "$HOSTS_FILE" "${HOSTS_FILE}.bak.$$" 2>/dev/null || true
+
+if command -v curl >/dev/null 2>&1; then
+    echo "使用 curl 下载..."
+    curl -fsSL "$GITHUB520_URL" >> "$HOSTS_FILE" || {
+        echo "警告：curl 下载失败，GitHub 访问可能受限"
+        cp "${HOSTS_FILE}.bak.$$" "$HOSTS_FILE" 2>/dev/null || true
+    }
+elif command -v wget >/dev/null 2>&1; then
+    echo "使用 wget 下载..."
+    wget -qO- "$GITHUB520_URL" >> "$HOSTS_FILE" || {
+        echo "警告：wget 下载失败，GitHub 访问可能受限"
+        cp "${HOSTS_FILE}.bak.$$" "$HOSTS_FILE" 2>/dev/null || true
+    }
+else
+    echo "警告：未找到 curl 或 wget，无法添加 GitHub520 hosts，GitHub 访问可能失败"
+fi
+echo "GitHub520 hosts 添加完成"
+
 # ===== 镜像源 =====
 echo ">>> 使用 reflector 更新镜像源（按速度排序）..."
+echo "正在测试镜像下载速度，可能需要 1~2 分钟，请稍候..."
 cp /etc/pacman.d/mirrorlist "/etc/pacman.d/mirrorlist.bak.$$" 2>/dev/null || true
-reflector --country China --protocol https --latest 10 --sort rate --save /etc/pacman.d/mirrorlist
+
+reflector \
+    --country China \
+    --protocol https \
+    --latest 10 \
+    --sort rate \
+    --save /etc/pacman.d/mirrorlist \
+    --verbose \
+    --download-timeout 5
+
 echo "镜像源配置完成"
 
 # ===== 微码 =====
@@ -338,7 +387,7 @@ if [ -z "$NET_OK" ]; then
 fi
 echo "网络连通性正常"
 
-# ===== 安装基础系统 =====
+# ===== 安装基础系统（不包含 curl） =====
 echo ">>> 开始安装基础系统，这可能需要几分钟..."
 pacstrap /mnt base linux linux-firmware base-devel vim networkmanager sudo xfsprogs grub efibootmgr git openssh plymouth fastfetch $CPU_UCODE
 echo "基础系统安装完成"
@@ -350,7 +399,6 @@ echo "fstab 生成完成"
 
 # ===== chroot 配置脚本 =====
 echo ">>> 写入配置变量文件..."
-# 注意：密码不写入磁盘，稍后通过 stdin(here-doc) 传入 chroot
 {
     printf 'TIMEZONE=%q\n' "$TIMEZONE"
     printf 'LOCALE=%q\n' "$LOCALE"
@@ -368,7 +416,6 @@ trap 'echo "错误：步骤失败（行 ${LINENO}）：${BASH_COMMAND}" >&2; exi
 
 source /root/config.env
 
-# 密码通过 stdin(here-doc) 传入，不落盘
 IFS= read -r ROOT_PASSWORD
 IFS= read -r USER_PASSWORD
 
@@ -399,7 +446,6 @@ echo "root 密码设置完成"
 
 echo ">>> 创建用户 ${USERNAME}..."
 if [ -d "/home/${USERNAME}" ]; then
-    # 重装保留 Home：沿用原家目录的 UID/GID，避免属主错乱
     EXIST_UID=$(stat -c '%u' "/home/${USERNAME}")
     EXIST_GID=$(stat -c '%g' "/home/${USERNAME}")
     echo "检测到已有家目录，沿用 UID=${EXIST_UID} GID=${EXIST_GID}"
@@ -433,7 +479,6 @@ systemctl enable sshd
 echo "SSH 服务已启用"
 
 echo ">>> 配置 Plymouth 启动动画..."
-# 添加 plymouth 钩子到 mkinitcpio：优先置于 udev 之后，其次 systemd 之后，兜底插入括号内
 if grep -q '\bplymouth\b' /etc/mkinitcpio.conf; then
     :
 elif grep -qE '^HOOKS=.*\budev\b' /etc/mkinitcpio.conf; then
@@ -446,7 +491,6 @@ else
     echo "错误：无法在 mkinitcpio.conf 中定位 HOOKS 行以添加 plymouth。"
     exit 1
 fi
-# 为内核命令行添加 splash（GRUB 稍后据此生成配置），避免重复添加
 if ! grep -q 'splash' /etc/default/grub; then
     sed -i '/^GRUB_CMDLINE_LINUX_DEFAULT=/s/"\(.*\)"/"\1 splash"/' /etc/default/grub
 fi
@@ -456,10 +500,8 @@ PLYMOUTH_THEME_REPO="https://github.com/mfinelli/plymouth-theme-arch-logo-symbol
 THEME_SRC="/tmp/plymouth-theme-arch-logo-symbol"
 FALLBACK_THEME="bgrt"
 
-# 主题安装可能因网络/仓库问题失败；失败时回退到内置主题，不中断整个安装
 install_custom_theme() {
     rm -rf "$THEME_SRC"
-    # 重试 3 次克隆，缓解网络抖动
     local n=1
     while [ $n -le 3 ]; do
         git clone --depth 1 "$PLYMOUTH_THEME_REPO" "$THEME_SRC" && break
@@ -469,7 +511,6 @@ install_custom_theme() {
     done
     [ -d "$THEME_SRC" ] || return 1
 
-    # 主题名取自仓库中的 .plymouth 文件名
     local theme_plymouth theme_name
     theme_plymouth=$(find "$THEME_SRC" -name '*.plymouth' | head -n1)
     [ -n "$theme_plymouth" ] || { echo "仓库中未找到 .plymouth 文件"; return 1; }
