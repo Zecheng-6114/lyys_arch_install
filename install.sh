@@ -433,14 +433,67 @@ systemctl enable sshd
 echo "SSH 服务已启用"
 
 echo ">>> 配置 Plymouth 启动动画..."
-# 添加 plymouth 钩子到 mkinitcpio（置于 udev 之后），避免重复添加
-if ! grep -q '\bplymouth\b' /etc/mkinitcpio.conf; then
+# 添加 plymouth 钩子到 mkinitcpio：优先置于 udev 之后，其次 systemd 之后，兜底插入括号内
+if grep -q '\bplymouth\b' /etc/mkinitcpio.conf; then
+    :
+elif grep -qE '^HOOKS=.*\budev\b' /etc/mkinitcpio.conf; then
     sed -i '/^HOOKS=/s/\budev\b/udev plymouth/' /etc/mkinitcpio.conf
+elif grep -qE '^HOOKS=.*\bsystemd\b' /etc/mkinitcpio.conf; then
+    sed -i '/^HOOKS=/s/\bsystemd\b/systemd plymouth/' /etc/mkinitcpio.conf
+elif grep -qE '^HOOKS=\(' /etc/mkinitcpio.conf; then
+    sed -i '/^HOOKS=(/s/)/ plymouth)/' /etc/mkinitcpio.conf
+else
+    echo "错误：无法在 mkinitcpio.conf 中定位 HOOKS 行以添加 plymouth。"
+    exit 1
 fi
 # 为内核命令行添加 splash（GRUB 稍后据此生成配置），避免重复添加
 if ! grep -q 'splash' /etc/default/grub; then
     sed -i '/^GRUB_CMDLINE_LINUX_DEFAULT=/s/"\(.*\)"/"\1 splash"/' /etc/default/grub
 fi
+
+echo ">>> 安装 Plymouth 主题 arch-logo-symbol..."
+PLYMOUTH_THEME_REPO="https://github.com/mfinelli/plymouth-theme-arch-logo-symbol.git"
+THEME_SRC="/tmp/plymouth-theme-arch-logo-symbol"
+FALLBACK_THEME="bgrt"
+
+# 主题安装可能因网络/仓库问题失败；失败时回退到内置主题，不中断整个安装
+install_custom_theme() {
+    rm -rf "$THEME_SRC"
+    # 重试 3 次克隆，缓解网络抖动
+    local n=1
+    while [ $n -le 3 ]; do
+        git clone --depth 1 "$PLYMOUTH_THEME_REPO" "$THEME_SRC" && break
+        echo "克隆失败（第 ${n} 次），重试中..."
+        rm -rf "$THEME_SRC"
+        n=$((n + 1))
+    done
+    [ -d "$THEME_SRC" ] || return 1
+
+    # 主题名取自仓库中的 .plymouth 文件名
+    local theme_plymouth theme_name
+    theme_plymouth=$(find "$THEME_SRC" -name '*.plymouth' | head -n1)
+    [ -n "$theme_plymouth" ] || { echo "仓库中未找到 .plymouth 文件"; return 1; }
+    theme_name=$(basename "$theme_plymouth" .plymouth)
+
+    if [ -f "${THEME_SRC}/Makefile" ]; then
+        make -C "$THEME_SRC" install || return 1
+    else
+        install -d "/usr/share/plymouth/themes/${theme_name}" || return 1
+        cp -r "$(dirname "$theme_plymouth")"/. "/usr/share/plymouth/themes/${theme_name}/" || return 1
+    fi
+    plymouth-set-default-theme "$theme_name" || return 1
+    echo "Plymouth 主题 ${theme_name} 已设为默认"
+    return 0
+}
+
+if install_custom_theme; then
+    :
+else
+    echo "警告：自定义主题安装失败，回退到内置主题 ${FALLBACK_THEME}。"
+    plymouth-set-default-theme "$FALLBACK_THEME" || echo "警告：回退主题设置失败，将使用 Plymouth 默认主题。"
+fi
+rm -rf "$THEME_SRC"
+
 mkinitcpio -P
 echo "Plymouth 配置完成"
 
