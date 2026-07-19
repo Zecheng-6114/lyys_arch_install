@@ -2,14 +2,52 @@
 set -Eeo pipefail
 trap 'echo "错误：步骤失败（行 ${LINENO}）：${BASH_COMMAND}" >&2; exit 1' ERR
 
-# ===== 配置变量（按你的实际情况改） =====
-DISK="/dev/nvme0n1"
-HOSTNAME="114"
-USERNAME="514"
-USER_PASSWORD="191"
-ROOT_PASSWORD="981"
-TIMEZONE="Asia/Shanghai"
-LOCALE="zh_CN.UTF-8"
+# ===== 配置变量（交互式输入，回车使用默认值） =====
+read -p "目标磁盘 [默认 /dev/nvme0n1]: " DISK
+DISK="${DISK:-/dev/nvme0n1}"
+
+read -p "主机名 [默认 arch]: " HOSTNAME
+HOSTNAME="${HOSTNAME:-arch}"
+
+read -p "用户名 [默认 user]: " USERNAME
+USERNAME="${USERNAME:-user}"
+
+read -p "时区 [默认 Asia/Shanghai]: " TIMEZONE
+TIMEZONE="${TIMEZONE:-Asia/Shanghai}"
+
+read -p "语言环境 [默认 zh_CN.UTF-8]: " LOCALE
+LOCALE="${LOCALE:-zh_CN.UTF-8}"
+
+while true; do
+    read -s -p "root 密码: " ROOT_PASSWORD; echo
+    read -s -p "确认 root 密码: " ROOT_PASSWORD_CONFIRM; echo
+    if [ -z "$ROOT_PASSWORD" ]; then
+        echo "密码不能为空，请重新输入。"
+    elif [ "$ROOT_PASSWORD" != "$ROOT_PASSWORD_CONFIRM" ]; then
+        echo "两次输入不一致，请重新输入。"
+    else
+        break
+    fi
+done
+
+while true; do
+    read -s -p "用户 ${USERNAME} 密码: " USER_PASSWORD; echo
+    read -s -p "确认用户密码: " USER_PASSWORD_CONFIRM; echo
+    if [ -z "$USER_PASSWORD" ]; then
+        echo "密码不能为空，请重新输入。"
+    elif [ "$USER_PASSWORD" != "$USER_PASSWORD_CONFIRM" ]; then
+        echo "两次输入不一致，请重新输入。"
+    else
+        break
+    fi
+done
+
+if [ ! -b "$DISK" ]; then
+    echo "错误：磁盘 $DISK 不存在。"
+    exit 1
+fi
+
+echo "配置确认：磁盘=$DISK 主机名=$HOSTNAME 用户=$USERNAME 时区=$TIMEZONE 语言=$LOCALE"
 
 # ===== 检查 UEFI =====
 if [ ! -d /sys/firmware/efi ]; then
@@ -192,41 +230,55 @@ genfstab -U /mnt >> /mnt/etc/fstab
 echo "fstab 生成完成"
 
 # ===== chroot 配置脚本 =====
+echo ">>> 写入配置变量文件..."
+{
+    printf 'TIMEZONE=%q\n' "$TIMEZONE"
+    printf 'LOCALE=%q\n' "$LOCALE"
+    printf 'HOSTNAME=%q\n' "$HOSTNAME"
+    printf 'ROOT_PASSWORD=%q\n' "$ROOT_PASSWORD"
+    printf 'USERNAME=%q\n' "$USERNAME"
+    printf 'USER_PASSWORD=%q\n' "$USER_PASSWORD"
+} > /mnt/root/config.env
+chmod 600 /mnt/root/config.env
+echo "配置变量文件已写入"
+
 echo ">>> 准备 chroot 配置脚本..."
 cat <<'INNER_EOF' > /mnt/root/config.sh
 #!/bin/bash
 set -Eeo pipefail
 trap 'echo "错误：步骤失败（行 ${LINENO}）：${BASH_COMMAND}" >&2; exit 1' ERR
 
+source /root/config.env
+
 echo ">>> 配置时区..."
-ln -sf /usr/share/zoneinfo/__TIMEZONE__ /etc/localtime
+ln -sf "/usr/share/zoneinfo/${TIMEZONE}" /etc/localtime
 hwclock --systohc
 echo "时区配置完成"
 
 echo ">>> 配置语言环境..."
 sed -i '/en_US.UTF-8/s/^#//' /etc/locale.gen
-sed -i "/__LOCALE__/s/^#//" /etc/locale.gen
+sed -i "\|${LOCALE}|s/^#//" /etc/locale.gen
 locale-gen
-echo "LANG=__LOCALE__" > /etc/locale.conf
+echo "LANG=${LOCALE}" > /etc/locale.conf
 echo "语言环境配置完成"
 
 echo ">>> 配置主机名..."
-echo "__HOSTNAME__" > /etc/hostname
+echo "${HOSTNAME}" > /etc/hostname
 cat > /etc/hosts <<HOSTFILE
 127.0.0.1   localhost
 ::1         localhost
-127.0.1.1   __HOSTNAME__.localdomain __HOSTNAME__
+127.0.1.1   ${HOSTNAME}.localdomain ${HOSTNAME}
 HOSTFILE
 echo "主机名配置完成"
 
 echo ">>> 设置 root 密码..."
-echo "root:__ROOT_PASSWORD__" | chpasswd
+echo "root:${ROOT_PASSWORD}" | chpasswd
 echo "root 密码设置完成"
 
-echo ">>> 创建用户 __USERNAME__..."
-useradd -m -G wheel -s /bin/bash __USERNAME__
-echo "__USERNAME__:__USER_PASSWORD__" | chpasswd
-echo "用户 __USERNAME__ 创建完成"
+echo ">>> 创建用户 ${USERNAME}..."
+useradd -m -G wheel -s /bin/bash "${USERNAME}"
+echo "${USERNAME}:${USER_PASSWORD}" | chpasswd
+echo "用户 ${USERNAME} 创建完成"
 
 echo ">>> 配置 sudo 权限..."
 echo '%wheel ALL=(ALL:ALL) ALL' > /etc/sudoers.d/99-wheel
@@ -243,21 +295,12 @@ grub-mkconfig -o /boot/grub/grub.cfg
 echo "GRUB 安装完成"
 INNER_EOF
 
-echo ">>> 替换配置变量..."
-sed -i "s|__TIMEZONE__|$TIMEZONE|g" /mnt/root/config.sh
-sed -i "s|__LOCALE__|$LOCALE|g" /mnt/root/config.sh
-sed -i "s|__HOSTNAME__|$HOSTNAME|g" /mnt/root/config.sh
-sed -i "s|__ROOT_PASSWORD__|$ROOT_PASSWORD|g" /mnt/root/config.sh
-sed -i "s|__USERNAME__|$USERNAME|g" /mnt/root/config.sh
-sed -i "s|__USER_PASSWORD__|$USER_PASSWORD|g" /mnt/root/config.sh
-echo "变量替换完成"
-
 echo ">>> 进入 chroot 环境执行配置..."
 arch-chroot /mnt bash /root/config.sh
 echo "chroot 配置完成"
 
 echo ">>> 清理临时脚本..."
-rm /mnt/root/config.sh
+rm /mnt/root/config.sh /mnt/root/config.env
 echo "临时脚本已清理"
 
 # ===== 卸载 =====
