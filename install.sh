@@ -1,5 +1,6 @@
 #!/bin/bash
-set -e
+set -Eeo pipefail
+trap 'echo "错误：步骤失败（行 ${LINENO}）：${BASH_COMMAND}" >&2; exit 1' ERR
 
 # ===== 配置变量（按你的实际情况改） =====
 DISK="/dev/nvme0n1"
@@ -194,7 +195,8 @@ echo "fstab 生成完成"
 echo ">>> 准备 chroot 配置脚本..."
 cat <<'INNER_EOF' > /mnt/root/config.sh
 #!/bin/bash
-set -e
+set -Eeo pipefail
+trap 'echo "错误：步骤失败（行 ${LINENO}）：${BASH_COMMAND}" >&2; exit 1' ERR
 
 echo ">>> 配置时区..."
 ln -sf /usr/share/zoneinfo/__TIMEZONE__ /etc/localtime
