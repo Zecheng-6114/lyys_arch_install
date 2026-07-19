@@ -4,7 +4,10 @@ trap 'echo "错误：步骤失败（行 ${LINENO}）：${BASH_COMMAND}" >&2; exi
 
 # ===== Root 权限检查 =====
 if [ "$(id -u)" -ne 0 ]; then
-    echo "错误：请使用 root 权限运行此脚本（sudo $0）" >&2
+    echo "错误：请使用 root 权限运行此脚本" >&2
+    echo "正确用法：" >&2
+    echo "  curl -L <url> | sudo bash" >&2
+    echo "  或：sudo bash install.sh" >&2
     exit 1
 fi
 
@@ -334,7 +337,7 @@ cp /etc/pacman.d/mirrorlist "/etc/pacman.d/mirrorlist.bak.$$" 2>/dev/null || tru
 reflector \
     --country China \
     --protocol https \
-    --latest 5 \
+    --latest 10 \
     --sort rate \
     --save /etc/pacman.d/mirrorlist \
     --verbose \
@@ -372,7 +375,19 @@ echo "网络连通性正常"
 
 # ===== 安装基础系统 =====
 echo ">>> 开始安装基础系统，这可能需要几分钟..."
-pacstrap /mnt base linux linux-firmware base-devel vim networkmanager sudo xfsprogs grub efibootmgr git openssh curl plymouth fastfetch $CPU_UCODE
+PACKAGES="base linux linux-firmware base-devel vim networkmanager sudo xfsprogs grub efibootmgr git openssh curl plymouth fastfetch $CPU_UCODE"
+for attempt in 1 2 3; do
+    if pacstrap /mnt $PACKAGES; then
+        break
+    fi
+    if [ $attempt -lt 3 ]; then
+        echo "警告：pacstrap 失败（第 ${attempt} 次），10 秒后重试..."
+        sleep 10
+    else
+        echo "错误：pacstrap 多次失败，请检查网络连接和镜像源后重试。"
+        exit 1
+    fi
+done
 echo "基础系统安装完成"
 
 # ===== fstab =====
