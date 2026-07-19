@@ -2,6 +2,22 @@
 set -Eeo pipefail
 trap 'echo "错误：步骤失败（行 ${LINENO}）：${BASH_COMMAND}" >&2; exit 1' ERR
 
+# ===== 依赖工具检查 =====
+echo ">>> 检查依赖工具..."
+REQUIRED_TOOLS="sgdisk mkfs.fat mkswap mkfs.ext4 mkfs.xfs mount umount swapon swapoff lsblk awk grep ping timedatectl pacstrap genfstab arch-chroot"
+MISSING_TOOLS=""
+for tool in $REQUIRED_TOOLS; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        MISSING_TOOLS="${MISSING_TOOLS} ${tool}"
+    fi
+done
+if [ -n "$MISSING_TOOLS" ]; then
+    echo "错误：缺少以下依赖工具:${MISSING_TOOLS}"
+    echo "请在 Arch 安装环境中运行，或安装 gptfdisk/dosfstools/xfsprogs/arch-install-scripts 等对应软件包。"
+    exit 1
+fi
+echo "依赖工具检查通过"
+
 # ===== 配置变量（交互式输入，回车使用默认值） =====
 echo ">>> 检测可用磁盘..."
 lsblk -dpno NAME,SIZE,MODEL,TYPE | awk '$4=="disk"'
@@ -145,7 +161,7 @@ if [[ "$INSTALL_MODE" == "full" ]]; then
     echo "Root 分区已创建"
 
     echo ">>> 创建 Home 分区 (剩余空间)..."
-    sgdisk -N 4 -t 4:8300 -c 4:"HOME" $DISK
+    sgdisk -n 4:0:0 -t 4:8300 -c 4:"HOME" $DISK
     echo "Home 分区已创建"
 
     echo ">>> 格式化 EFI..."
@@ -165,6 +181,18 @@ if [[ "$INSTALL_MODE" == "full" ]]; then
     echo "Home 格式化完成"
 else
     echo ">>> 检查现有分区..."
+    if [ -b "$PART_EFI" ]; then
+        echo "EFI 分区存在: $PART_EFI"
+    else
+        echo "错误：EFI 分区不存在"
+        exit 1
+    fi
+    if [ -b "$PART_SWAP" ]; then
+        echo "Swap 分区存在: $PART_SWAP"
+    else
+        echo "错误：Swap 分区不存在"
+        exit 1
+    fi
     if [ -b "$PART_ROOT" ]; then
         echo "Root 分区存在: $PART_ROOT"
     else
@@ -230,6 +258,22 @@ else
     echo "未检测到已知 CPU，跳过微码安装"
 fi
 
+# ===== 网络检测 =====
+echo ">>> 检测网络连通性..."
+NET_OK=""
+for host in 223.5.5.5 8.8.8.8 archlinux.org; do
+    if ping -c 1 -W 3 "$host" >/dev/null 2>&1; then
+        NET_OK="1"
+        break
+    fi
+done
+if [ -z "$NET_OK" ]; then
+    echo "错误：无法连接网络，pacstrap 需要联网下载软件包。"
+    echo "请先配置网络（有线通常自动获取，无线可用 iwctl 连接）后重试。"
+    exit 1
+fi
+echo "网络连通性正常"
+
 # ===== 安装基础系统 =====
 echo ">>> 开始安装基础系统，这可能需要几分钟..."
 pacstrap /mnt base linux linux-firmware base-devel vim networkmanager sudo xfsprogs grub efibootmgr git openssh $CPU_UCODE
@@ -237,7 +281,7 @@ echo "基础系统安装完成"
 
 # ===== fstab =====
 echo ">>> 生成 fstab..."
-genfstab -U /mnt >> /mnt/etc/fstab
+genfstab -U /mnt > /mnt/etc/fstab
 echo "fstab 生成完成"
 
 # ===== chroot 配置脚本 =====
@@ -283,12 +327,21 @@ HOSTFILE
 echo "主机名配置完成"
 
 echo ">>> 设置 root 密码..."
-echo "root:${ROOT_PASSWORD}" | chpasswd
+printf '%s\n' "root:${ROOT_PASSWORD}" | chpasswd
 echo "root 密码设置完成"
 
 echo ">>> 创建用户 ${USERNAME}..."
-useradd -m -G wheel -s /bin/bash "${USERNAME}"
-echo "${USERNAME}:${USER_PASSWORD}" | chpasswd
+if [ -d "/home/${USERNAME}" ]; then
+    # 重装保留 Home：沿用原家目录的 UID/GID，避免属主错乱
+    EXIST_UID=$(stat -c '%u' "/home/${USERNAME}")
+    EXIST_GID=$(stat -c '%g' "/home/${USERNAME}")
+    echo "检测到已有家目录，沿用 UID=${EXIST_UID} GID=${EXIST_GID}"
+    getent group "$EXIST_GID" >/dev/null 2>&1 || groupadd -g "$EXIST_GID" "${USERNAME}"
+    useradd -M -u "$EXIST_UID" -g "$EXIST_GID" -G wheel -s /bin/bash "${USERNAME}"
+else
+    useradd -m -G wheel -s /bin/bash "${USERNAME}"
+fi
+printf '%s\n' "${USERNAME}:${USER_PASSWORD}" | chpasswd
 echo "用户 ${USERNAME} 创建完成"
 
 echo ">>> 配置 sudo 权限..."
