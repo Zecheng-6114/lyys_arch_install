@@ -6,12 +6,13 @@ trap 'echo "错误：步骤失败（行 ${LINENO}）：${BASH_COMMAND}" >&2; exi
 
 prompt_password() {
     local var_name="$1" prompt="$2"
+    local confirm_name="${var_name}_CONFIRM"
     while true; do
         read -s -p "$prompt: " "${var_name}" < /dev/tty; echo
-        read -s -p "确认${prompt}: " "${var_name}_CONFIRM" < /dev/tty; echo
+        read -s -p "确认${prompt}: " "$confirm_name" < /dev/tty; echo
         if [ -z "${!var_name}" ]; then
             echo "密码不能为空，请重新输入。"
-        elif [ "${!var_name}" != "${!var_name}_CONFIRM" ]; then
+        elif [ "${!var_name}" != "${!confirm_name}" ]; then
             echo "两次输入不一致，请重新输入。"
         else
             break
