@@ -47,12 +47,15 @@ systemctl enable github520-update.timer
 echo ">>> 设置 root 密码..."
 printf '%s\n' "root:${ROOT_PASSWORD}" | chpasswd
 
+USER_HOME="/home/${USERNAME}"
+
 echo ">>> 创建用户 ${USERNAME}..."
-if [ -d "/home/${USERNAME}" ]; then
-    EXIST_UID=$(stat -c '%u' "/home/${USERNAME}")
-    EXIST_GID=$(stat -c '%g' "/home/${USERNAME}")
+if [ -d "$USER_HOME" ]; then
+    EXIST_UID=$(stat -c '%u' "$USER_HOME")
+    EXIST_GID=$(stat -c '%g' "$USER_HOME")
     echo "检测到已有家目录，沿用 UID=${EXIST_UID} GID=${EXIST_GID}"
     getent group "$EXIST_GID" >/dev/null 2>&1 || groupadd -g "$EXIST_GID" "${USERNAME}"
+    useradd -u "$EXIST_UID" -g "$EXIST_GID" -G wheel -s /bin/bash "${USERNAME}"
 else
     useradd -m -G wheel -s /bin/bash "${USERNAME}"
 fi
@@ -60,11 +63,11 @@ printf '%s\n' "${USERNAME}:${USER_PASSWORD}" | chpasswd
 
 # --- 用户配置 ---
 echo ">>> 配置登录时运行 fastfetch..."
-USER_BASHRC="/home/${USERNAME}/.bashrc"
+USER_BASHRC="${USER_HOME}/.bashrc"
 if ! grep -qx 'fastfetch' "$USER_BASHRC" 2>/dev/null; then
     echo 'fastfetch' >> "$USER_BASHRC"
 fi
-chown "${USERNAME}:${USERNAME}" "$USER_BASHRC"
+chown "${USERNAME}:$(id -gn "${USERNAME}")" "$USER_BASHRC"
 
 echo ">>> 配置 sudo 权限..."
 echo '%wheel ALL=(ALL:ALL) ALL' > /etc/sudoers.d/99-wheel
@@ -72,22 +75,19 @@ chmod 440 /etc/sudoers.d/99-wheel
 
 # --- 系统服务 ---
 echo ">>> 启用系统服务..."
-systemctl enable NetworkManager
-systemctl enable sshd
+systemctl enable NetworkManager sshd
 
 # --- Plymouth ---
 echo ">>> 配置 Plymouth 启动动画..."
-if grep -q '\bplymouth\b' /etc/mkinitcpio.conf; then
-    :
-elif grep -qE '^HOOKS=.*\budev\b' /etc/mkinitcpio.conf; then
-    sed -i '/^HOOKS=/s/\budev\b/udev plymouth/' /etc/mkinitcpio.conf
-elif grep -qE '^HOOKS=.*\bsystemd\b' /etc/mkinitcpio.conf; then
-    sed -i '/^HOOKS=/s/\bsystemd\b/systemd plymouth/' /etc/mkinitcpio.conf
-elif grep -qE '^HOOKS=\(' /etc/mkinitcpio.conf; then
-    sed -i '/^HOOKS=(/s/)/ plymouth)/' /etc/mkinitcpio.conf
-else
-    echo "错误：无法在 mkinitcpio.conf 中定位 HOOKS 行以添加 plymouth。"
-    exit 1
+if ! grep -q '\bplymouth\b' /etc/mkinitcpio.conf; then
+    if grep -qE '^HOOKS=.*\b(udev|systemd)\b' /etc/mkinitcpio.conf; then
+        sed -i '/^HOOKS=/s/\b\(udev\|systemd\)\b/& plymouth/' /etc/mkinitcpio.conf
+    elif grep -qE '^HOOKS=\(' /etc/mkinitcpio.conf; then
+        sed -i '/^HOOKS=(/s/)/ plymouth)/' /etc/mkinitcpio.conf
+    else
+        echo "错误：无法在 mkinitcpio.conf 中定位 HOOKS 行以添加 plymouth。"
+        exit 1
+    fi
 fi
 
 if ! grep -q 'splash' /etc/default/grub; then

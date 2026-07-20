@@ -17,18 +17,17 @@ self_update() {
 
 self_update
 
-REPO="https://github.com/Zecheng-6114/lyys-plymouthd-theme.git"
-CACHE="/var/cache/lyys-plymouth-theme"
+REPO="https://github.com/catppuccin/plymouth.git"
+CACHE="/var/cache/catppuccin-plymouth"
+THEME_NAME="catppuccin-mocha"
 
 install_from_cache() {
-    local theme_plymouth theme_name
-    theme_plymouth=$(ls "$CACHE"/*.plymouth 2>/dev/null | head -n1)
-    [ -n "$theme_plymouth" ] || return 1
-    theme_name=$(basename "$theme_plymouth" .plymouth)
-
-    install -d "/usr/share/plymouth/themes/${theme_name}" || return 1
-    cp -r "$CACHE"/. "/usr/share/plymouth/themes/${theme_name}/" || return 1
-    plymouth-set-default-theme "$theme_name" || return 1
+    local src="$CACHE/themes/${THEME_NAME}"
+    local dst="/usr/share/plymouth/themes/${THEME_NAME}"
+    [ -d "$src" ] || return 1
+    install -d "$dst" || return 1
+    cp -r "$src"/. "$dst"/ || return 1
+    plymouth-set-default-theme "$THEME_NAME" || return 1
     mkinitcpio -P
     return 0
 }
@@ -56,4 +55,4 @@ else
     git clone --depth 1 "$REPO" "$CACHE" || exit 1
 fi
 
-install_from_cache && echo "主题更新完成" || echo "主题安装失败"
+install_from_cache && echo "主题 ${THEME_NAME} 更新完成" || echo "主题安装失败"

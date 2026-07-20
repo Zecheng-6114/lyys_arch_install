@@ -260,9 +260,7 @@ mount "$PART_ROOT" /mnt
 mkdir -p /mnt/boot /mnt/home
 mount "$PART_EFI" /mnt/boot
 swapon "$PART_SWAP"
-if [[ "$INSTALL_MODE" == "full" ]]; then
-    mount "$PART_HOME" /mnt/home
-fi
+mount "$PART_HOME" /mnt/home
 echo "挂载完成"
 
 # ===== 镜像源 =====
