@@ -309,6 +309,11 @@ if [ -z "$NET_OK" ]; then
 fi
 echo "网络连通性正常"
 
+# ===== GitHub520 hosts =====
+echo ">>> 配置 GitHub520 hosts..."
+sed -i "/# GitHub520 Host Start/Q" /etc/hosts
+curl -fsSL https://raw.hellogithub.com/hosts >> /etc/hosts && echo "GitHub520 hosts 配置完成" || echo "警告：GitHub520 hosts 配置失败，继续安装"
+
 # ===== 安装基础系统 =====
 echo ">>> 开始安装基础系统，这可能需要几分钟..."
 PACKAGES="base linux linux-firmware base-devel vim networkmanager sudo xfsprogs grub efibootmgr git openssh curl plymouth fastfetch $CPU_UCODE"
