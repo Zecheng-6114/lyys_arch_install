@@ -15,8 +15,19 @@ read -p "用户名 [user]: " USERNAME < /dev/tty;    USERNAME="${USERNAME:-user}
 read -p "时区 [Asia/Shanghai]: " TZ < /dev/tty;   TZ="${TZ:-Asia/Shanghai}"
 read -p "语言 [zh_CN.UTF-8]: " LOCALE < /dev/tty; LOCALE="${LOCALE:-zh_CN.UTF-8}"
 
-read -s -p "root 密码: " ROOT_PW < /dev/tty; echo
-read -s -p "用户密码: " USER_PW < /dev/tty; echo
+while true; do
+  read -s -p "root 密码: " ROOT_PW < /dev/tty; echo
+  read -s -p "确认 root 密码: " ROOT_PW2 < /dev/tty; echo
+  [[ "$ROOT_PW" == "$ROOT_PW2" ]] && break
+  echo "密码不匹配，请重新输入"
+done
+
+while true; do
+  read -s -p "用户密码: " USER_PW < /dev/tty; echo
+  read -s -p "确认用户密码: " USER_PW2 < /dev/tty; echo
+  [[ "$USER_PW" == "$USER_PW2" ]] && break
+  echo "密码不匹配，请重新输入"
+done
 
 # 分区
 [[ "${DISK: -1}" =~ [0-9] ]] && P="${DISK}p" || P="$DISK"
