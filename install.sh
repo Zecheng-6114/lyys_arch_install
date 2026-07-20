@@ -19,6 +19,54 @@ fatal()   { error "$1"; exit 1; }
 
 trap 'fatal "步骤失败（行 ${LINENO}）：${BASH_COMMAND}"' ERR
 
+# ===== 多线程下载引擎（纯 curl，基于 HTTP Range） =====
+
+MT_DOWNLOAD="/tmp/.mt-download.sh"
+
+create_mt_download() {
+    cat > "$MT_DOWNLOAD" << 'MTSCRIPT'
+#!/bin/bash
+output="$1"
+url="$2"
+threads=4
+
+filesize=$(curl -sI -L "$url" 2>/dev/null | grep -i '^content-length:' | tail -1 | awk '{print $2}' | tr -d '\r\n')
+
+if [ -z "$filesize" ] || [ "$filesize" -lt 524288 ]; then
+    exec curl -fL --retry 3 -o "$output" "$url"
+fi
+
+code=$(curl -sI -L -H "Range: bytes=0-0" "$url" -o /dev/null -w '%{http_code}' 2>/dev/null)
+if [ "$code" != "206" ]; then
+    exec curl -fL --retry 3 -o "$output" "$url"
+fi
+
+chunk_size=$((filesize / threads))
+pids=()
+for i in $(seq 0 $((threads - 1))); do
+    start=$((i * chunk_size))
+    if [ "$i" -eq $((threads - 1)) ]; then
+        end=$((filesize - 1))
+    else
+        end=$(((i + 1) * chunk_size - 1))
+    fi
+    curl -fs -L -H "Range: bytes=$start-$end" --retry 3 -o "${output}.mt.${i}" "$url" &
+    pids+=($!)
+done
+
+for pid in "${pids[@]}"; do
+    wait "$pid" || { rm -f "${output}.mt."*; exec curl -fL --retry 3 -o "$output" "$url"; }
+done
+
+: > "$output"
+for i in $(seq 0 $((threads - 1))); do
+    cat "${output}.mt.${i}" >> "$output"
+    rm -f "${output}.mt.${i}"
+done
+MTSCRIPT
+    chmod +x "$MT_DOWNLOAD"
+}
+
 # ===== 工具函数 =====
 
 prompt_password() {
@@ -116,26 +164,9 @@ if [ -n "$MISSING_TOOLS" ]; then
 fi
 success "依赖工具检查通过"
 
-# ===== 可选加速：aria2 =====
-USE_ARIA2=false
-if command -v aria2c >/dev/null 2>&1; then
-    USE_ARIA2=true
-else
-    read -p "$(echo -e "  ${BOLD}?${NC} 是否安装 aria2 以启用多线程下载加速？[y/N]: ")" INSTALL_ARIA2 < /dev/tty
-    if [[ "$INSTALL_ARIA2" =~ ^[Yy]$ ]] && command -v pacman >/dev/null 2>&1; then
-        pacman -Sy --noconfirm aria2
-    fi
-fi
-if command -v aria2c >/dev/null 2>&1 && aria2c --version >/dev/null 2>&1; then
-    USE_ARIA2=true
-else
-    USE_ARIA2=false
-fi
-if $USE_ARIA2; then
-    success "已启用 aria2 多线程加速"
-else
-    warn "未使用 aria2，下载将使用单线程"
-fi
+# ===== 创建多线程下载引擎 =====
+create_mt_download
+success "多线程下载引擎就绪 ${DIM}(curl Range × 4 连接)${NC}"
 
 # ===== 配置变量 =====
 info "检测可用磁盘..."
@@ -177,7 +208,7 @@ echo -e "  主机名  = ${BOLD}${HOSTNAME}${NC}"
 echo -e "  用户名  = ${BOLD}${USERNAME}${NC}"
 echo -e "  时区    = ${BOLD}${TIMEZONE}${NC}"
 echo -e "  语言    = ${BOLD}${LOCALE}${NC}"
-echo -e "  加速    = ${BOLD}$($USE_ARIA2 && echo 'aria2 多线程' || echo '单线程')${NC}"
+echo -e "  加速    = ${BOLD}curl 多线程 (4 连接/文件)${NC}"
 echo ""
 
 # ===== 检查 UEFI =====
@@ -315,12 +346,9 @@ reflector \
 
 success "镜像源配置完成"
 
-# ===== 多线程加速：配置 pacman XferCommand =====
-if $USE_ARIA2; then
-    ARIA2C_BIN=$(command -v aria2c)
-    sed -i '/^\[options\]/a XferCommand = '"${ARIA2C_BIN}"' -c -x 4 -s 4 -j 4 -k 1M --allow-overwrite=true --quiet -o %o %u' /etc/pacman.conf
-    success "已配置 pacman 使用 aria2 多线程下载 (4 连接)"
-fi
+# ===== 配置 pacman 多线程下载 =====
+sed -i '/^\[options\]/a XferCommand = '"${MT_DOWNLOAD}"' %o %u' /etc/pacman.conf
+success "已配置 pacman 多线程下载 ${DIM}(每文件 4 连接并行)${NC}"
 
 # ===== 微码 =====
 CPU_UCODE=""
@@ -360,20 +388,13 @@ fi
 # ===== 安装基础系统 =====
 info "开始安装基础系统（这可能需要几分钟）..."
 PACKAGES="base linux linux-firmware base-devel vim networkmanager sudo xfsprogs grub efibootmgr git openssh curl plymouth fastfetch $CPU_UCODE"
-ARIA2_REMOVED=false
 for attempt in 1 2 3; do
     if pacstrap /mnt $PACKAGES; then
         break
     fi
     if [ $attempt -lt 3 ]; then
-        if $USE_ARIA2 && ! $ARIA2_REMOVED; then
-            warn "pacstrap 失败，可能是 aria2 不兼容，回退到默认下载器..."
-            sed -i '/^XferCommand.*aria2c/d' /etc/pacman.conf
-            ARIA2_REMOVED=true
-        else
-            warn "pacstrap 失败（第 ${attempt} 次），10 秒后重试..."
-            sleep 10
-        fi
+        warn "pacstrap 失败（第 ${attempt} 次），10 秒后重试..."
+        sleep 10
     else
         fatal "pacstrap 多次失败，请检查网络连接和镜像源后重试。"
     fi
@@ -410,49 +431,32 @@ FILES=(
     "plymouth-theme/update.timer|/mnt/etc/systemd/system/plymouth-theme-update.timer"
 )
 
-if $USE_ARIA2; then
-    aria_input=""
-    for entry in "${FILES[@]}"; do
-        src="${entry%%|*}"
-        dst="${entry##*|}"
-        aria_input+="${RAW_BASE}/${src}"$'\n'
-        aria_input+="  out=${dst}"$'\n'
-    done
-    if echo "$aria_input" | aria2c -x 4 -s 4 -j 7 --allow-overwrite=true --quiet -i - 2>/dev/null; then
-        success "配置脚本下载完成（aria2 多线程）"
-    else
-        warn "aria2 下载失败，回退到 curl..."
-        USE_ARIA2=false
-    fi
-fi
+pids=()
+for entry in "${FILES[@]}"; do
+    src="${entry%%|*}"
+    dst="${entry##*|}"
+    curl -fsSL "${RAW_BASE}/${src}" -o "$dst" &
+    pids+=($!)
+done
 
-if ! $USE_ARIA2; then
-    pids=()
-    for entry in "${FILES[@]}"; do
-        src="${entry%%|*}"
-        dst="${entry##*|}"
-        curl -fsSL "${RAW_BASE}/${src}" -o "$dst" &
-        pids+=($!)
-    done
-
-    fail=0
-    for i in "${!pids[@]}"; do
-        wait "${pids[$i]}" || { error "下载失败 ${FILES[$i]%%|*}"; fail=1; }
-    done
-    (( fail )) && exit 1
-    success "配置脚本下载完成"
-fi
+fail=0
+for i in "${!pids[@]}"; do
+    wait "${pids[$i]}" || { error "下载失败 ${FILES[$i]%%|*}"; fail=1; }
+done
+(( fail )) && exit 1
 
 for entry in "${FILES[@]}"; do
     dst="${entry##*|}"
     [[ "$dst" == *.sh ]] && chmod +x "$dst"
 done
+success "配置脚本下载完成"
 
 info "进入 chroot 环境执行配置..."
 printf '%s\n%s\n' "$ROOT_PASSWORD" "$USER_PASSWORD" | arch-chroot /mnt bash /root/config.sh
 
 # ===== 清理与卸载 =====
 info "清理临时脚本..."
+rm -f "$MT_DOWNLOAD"
 rm /mnt/root/config.sh /mnt/root/config.env
 
 info "卸载分区..."
