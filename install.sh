@@ -348,23 +348,36 @@ chmod 600 /mnt/root/config.env
 echo ">>> 下载配置脚本..."
 RAW_BASE="https://raw.githubusercontent.com/Zecheng-6114/lyys_arch_install/main"
 
-download() {
-    curl -fsSL "${RAW_BASE}/$1" -o "$2" || { echo "错误：下载失败 $1"; exit 1; }
-}
-
 install -d /mnt/root /mnt/usr/local/bin /mnt/etc/systemd/system
 
-download config.sh /mnt/root/config.sh
-chmod +x /mnt/root/config.sh
+FILES=(
+    "config.sh|/mnt/root/config.sh"
+    "github520/update.sh|/mnt/usr/local/bin/github520-update.sh"
+    "plymouth-theme/update.sh|/mnt/usr/local/bin/plymouth-theme-update.sh"
+    "github520/update.service|/mnt/etc/systemd/system/github520-update.service"
+    "github520/update.timer|/mnt/etc/systemd/system/github520-update.timer"
+    "plymouth-theme/update.service|/mnt/etc/systemd/system/plymouth-theme-update.service"
+    "plymouth-theme/update.timer|/mnt/etc/systemd/system/plymouth-theme-update.timer"
+)
 
-download github520/update.sh /mnt/usr/local/bin/github520-update.sh
-download plymouth-theme/update.sh /mnt/usr/local/bin/plymouth-theme-update.sh
-chmod +x /mnt/usr/local/bin/github520-update.sh /mnt/usr/local/bin/plymouth-theme-update.sh
+pids=()
+for entry in "${FILES[@]}"; do
+    src="${entry%%|*}"
+    dst="${entry##*|}"
+    curl -fsSL "${RAW_BASE}/${src}" -o "$dst" &
+    pids+=($!)
+done
 
-download github520/update.service /mnt/etc/systemd/system/github520-update.service
-download github520/update.timer /mnt/etc/systemd/system/github520-update.timer
-download plymouth-theme/update.service /mnt/etc/systemd/system/plymouth-theme-update.service
-download plymouth-theme/update.timer /mnt/etc/systemd/system/plymouth-theme-update.timer
+fail=0
+for i in "${!pids[@]}"; do
+    wait "${pids[$i]}" || { echo "错误：下载失败 ${FILES[$i]%%|*}"; fail=1; }
+done
+(( fail )) && exit 1
+
+for entry in "${FILES[@]}"; do
+    dst="${entry##*|}"
+    [[ "$dst" == *.sh ]] && chmod +x "$dst"
+done
 
 echo "配置脚本下载完成"
 
