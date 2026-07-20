@@ -58,25 +58,6 @@ mount "${P}4" /mnt/home
 # 镜像源
 reflector --country China --protocol https --latest 10 --sort rate --save /etc/pacman.d/mirrorlist --download-timeout 5 2>/dev/null
 
-# 多线程下载（纯 curl Range 分片，每文件 4 连接）
-cat > /tmp/.mt-dl.sh << 'MTDL'
-#!/bin/bash
-o="$1"; u="$2"
-fs=$(curl -sI -L "$u" 2>/dev/null | grep -i '^content-length:' | tail -1 | awk '{print $2}' | tr -d '\r\n')
-if [ -z "$fs" ] || [ "$fs" -lt 524288 ] || [ "$(curl -sI -L -H 'Range: bytes=0-0' "$u" -o /dev/null -w '%{http_code}' 2>/dev/null)" != "206" ]; then
-    exec curl -fL -o "$o" "$u"
-fi
-cs=$((fs/4)); pids=()
-for i in 0 1 2 3; do
-    s=$((i*cs)); [ $i -eq 3 ] && e=$((fs-1)) || e=$(((i+1)*cs-1))
-    curl -fs -L -H "Range: bytes=$s-$e" -o "${o}.p$i" "$u" & pids+=($!)
-done
-for p in "${pids[@]}"; do wait "$p" || { rm -f "${o}".p*; exec curl -fL -o "$o" "$u"; }; done
-: > "$o"; for i in 0 1 2 3; do cat "${o}.p$i" >> "$o"; rm -f "${o}.p$i"; done
-MTDL
-chmod +x /tmp/.mt-dl.sh
-sed -i '/^\[options\]/a XferCommand = /tmp/.mt-dl.sh %o %u' /etc/pacman.conf
-
 # GitHub520 hosts
 sed -i "/# GitHub520 Host Start/Q" /etc/hosts
 curl -fsSL https://raw.hellogithub.com/hosts >> /etc/hosts 2>/dev/null || true
@@ -153,6 +134,5 @@ rm /mnt/root/setup.sh
 
 swapoff "${P}2"
 umount -R /mnt
-rm -f /tmp/.mt-dl.sh
 
 echo "=== 安装完成，请 reboot 重启 ==="
