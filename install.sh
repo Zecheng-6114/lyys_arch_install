@@ -123,8 +123,13 @@ if command -v aria2c >/dev/null 2>&1; then
 else
     read -p "$(echo -e "  ${BOLD}?${NC} 是否安装 aria2 以启用多线程下载加速？[y/N]: ")" INSTALL_ARIA2 < /dev/tty
     if [[ "$INSTALL_ARIA2" =~ ^[Yy]$ ]] && command -v pacman >/dev/null 2>&1; then
-        pacman -Sy --noconfirm aria2 && USE_ARIA2=true
+        pacman -Sy --noconfirm aria2
     fi
+fi
+if command -v aria2c >/dev/null 2>&1 && aria2c --version >/dev/null 2>&1; then
+    USE_ARIA2=true
+else
+    USE_ARIA2=false
 fi
 if $USE_ARIA2; then
     success "已启用 aria2 多线程加速"
@@ -355,13 +360,20 @@ fi
 # ===== 安装基础系统 =====
 info "开始安装基础系统（这可能需要几分钟）..."
 PACKAGES="base linux linux-firmware base-devel vim networkmanager sudo xfsprogs grub efibootmgr git openssh curl plymouth fastfetch $CPU_UCODE"
+ARIA2_REMOVED=false
 for attempt in 1 2 3; do
     if pacstrap /mnt $PACKAGES; then
         break
     fi
     if [ $attempt -lt 3 ]; then
-        warn "pacstrap 失败（第 ${attempt} 次），10 秒后重试..."
-        sleep 10
+        if $USE_ARIA2 && ! $ARIA2_REMOVED; then
+            warn "pacstrap 失败，可能是 aria2 不兼容，回退到默认下载器..."
+            sed -i '/^XferCommand.*aria2c/d' /etc/pacman.conf
+            ARIA2_REMOVED=true
+        else
+            warn "pacstrap 失败（第 ${attempt} 次），10 秒后重试..."
+            sleep 10
+        fi
     else
         fatal "pacstrap 多次失败，请检查网络连接和镜像源后重试。"
     fi
