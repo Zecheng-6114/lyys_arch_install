@@ -9,11 +9,11 @@ echo "=== Arch Linux 安装脚本 ==="
 lsblk -dpno NAME,SIZE,MODEL,TYPE
 echo ""
 
-read -p "目标磁盘: " DISK
-read -p "主机名 [arch]: " HOSTNAME;    HOSTNAME="${HOSTNAME:-arch}"
-read -p "用户名 [user]: " USERNAME;    USERNAME="${USERNAME:-user}"
-read -p "时区 [Asia/Shanghai]: " TZ;   TZ="${TZ:-Asia/Shanghai}"
-read -p "语言 [zh_CN.UTF-8]: " LOCALE; LOCALE="${LOCALE:-zh_CN.UTF-8}"
+read -p "目标磁盘: " DISK < /dev/tty
+read -p "主机名 [arch]: " HOSTNAME < /dev/tty;    HOSTNAME="${HOSTNAME:-arch}"
+read -p "用户名 [user]: " USERNAME < /dev/tty;    USERNAME="${USERNAME:-user}"
+read -p "时区 [Asia/Shanghai]: " TZ < /dev/tty;   TZ="${TZ:-Asia/Shanghai}"
+read -p "语言 [zh_CN.UTF-8]: " LOCALE < /dev/tty; LOCALE="${LOCALE:-zh_CN.UTF-8}"
 
 read -s -p "root 密码: " ROOT_PW < /dev/tty; echo
 read -s -p "用户密码: " USER_PW < /dev/tty; echo
@@ -31,7 +31,7 @@ DISK_MIB=$(($(lsblk -bdno SIZE "$DISK") / 1048576))
 (( ROOT > 153600 )) && ROOT=153600
 
 echo "EFI=1024M  Swap=${SWAP}M  Root=${ROOT}M  Home=剩余"
-read -p "输入 yes 确认执行: " confirm
+read -p "输入 yes 确认执行: " confirm < /dev/tty
 [[ "$confirm" != "yes" ]] && exit 0
 
 umount -R /mnt 2>/dev/null || true
