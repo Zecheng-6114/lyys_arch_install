@@ -468,10 +468,9 @@ if ! grep -q 'splash' /etc/default/grub; then
     sed -i '/^GRUB_CMDLINE_LINUX_DEFAULT=/s/"\(.*\)"/"\1 splash"/' /etc/default/grub
 fi
 
-echo ">>> 安装 Plymouth 主题 catppuccin..."
-PLYMOUTH_THEME_REPO="https://github.com/catppuccin/plymouth.git"
-THEME_SRC="/tmp/catppuccin-plymouth"
-PLYMOUTH_FLAVOR="mocha"
+echo ">>> 安装 Plymouth 自定义主题..."
+PLYMOUTH_THEME_REPO="https://github.com/Zecheng-6114/lyys-plymouthd-themes.git"
+THEME_SRC="/tmp/lyys-plymouth-themes"
 FALLBACK_THEME="bgrt"
 
 install_custom_theme() {
@@ -486,16 +485,12 @@ install_custom_theme() {
     [ -d "$THEME_SRC" ] || return 1
 
     local theme_plymouth theme_name
-    theme_plymouth=$(find "$THEME_SRC" -name "*${PLYMOUTH_FLAVOR}*.plymouth" | head -n1)
-    [ -n "$theme_plymouth" ] || { echo "仓库中未找到 ${PLYMOUTH_FLAVOR} 风味的 .plymouth 文件"; return 1; }
+    theme_plymouth=$(ls "$THEME_SRC"/*.plymouth 2>/dev/null | head -n1)
+    [ -n "$theme_plymouth" ] || { echo "仓库根目录中未找到 .plymouth 文件"; return 1; }
     theme_name=$(basename "$theme_plymouth" .plymouth)
 
-    if [ -f "${THEME_SRC}/Makefile" ]; then
-        make -C "$THEME_SRC" install || return 1
-    else
-        install -d "/usr/share/plymouth/themes/${theme_name}" || return 1
-        cp -r "$(dirname "$theme_plymouth")"/. "/usr/share/plymouth/themes/${theme_name}/" || return 1
-    fi
+    install -d "/usr/share/plymouth/themes/${theme_name}" || return 1
+    cp -r "$THEME_SRC"/. "/usr/share/plymouth/themes/${theme_name}/" || return 1
     plymouth-set-default-theme "$theme_name" || return 1
     echo "Plymouth 主题 ${theme_name} 已设为默认"
     return 0
