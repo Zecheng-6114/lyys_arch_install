@@ -469,38 +469,105 @@ if ! grep -q 'splash' /etc/default/grub; then
 fi
 
 echo ">>> 安装 Plymouth 自定义主题..."
-PLYMOUTH_THEME_REPO="https://github.com/Zecheng-6114/lyys-plymouthd-themes.git"
-THEME_SRC="/tmp/lyys-plymouth-themes"
+PLYMOUTH_THEME_REPO="https://github.com/Zecheng-6114/lyys-plymouthd-theme.git"
+THEME_CACHE="/var/cache/lyys-plymouth-theme"
 FALLBACK_THEME="bgrt"
 
-install_custom_theme() {
-    rm -rf "$THEME_SRC"
-    local n=1
-    while [ $n -le 3 ]; do
-        git clone --depth 1 "$PLYMOUTH_THEME_REPO" "$THEME_SRC" && break
-        echo "克隆失败（第 ${n} 次），重试中..."
-        rm -rf "$THEME_SRC"
-        n=$((n + 1))
-    done
-    [ -d "$THEME_SRC" ] || return 1
-
+install_theme_from_cache() {
     local theme_plymouth theme_name
-    theme_plymouth=$(ls "$THEME_SRC"/*.plymouth 2>/dev/null | head -n1)
-    [ -n "$theme_plymouth" ] || { echo "仓库根目录中未找到 .plymouth 文件"; return 1; }
+    theme_plymouth=$(ls "$THEME_CACHE"/*.plymouth 2>/dev/null | head -n1)
+    [ -n "$theme_plymouth" ] || { echo "缓存目录中未找到 .plymouth 文件"; return 1; }
     theme_name=$(basename "$theme_plymouth" .plymouth)
 
     install -d "/usr/share/plymouth/themes/${theme_name}" || return 1
-    cp -r "$THEME_SRC"/. "/usr/share/plymouth/themes/${theme_name}/" || return 1
+    cp -r "$THEME_CACHE"/. "/usr/share/plymouth/themes/${theme_name}/" || return 1
     plymouth-set-default-theme "$theme_name" || return 1
     echo "Plymouth 主题 ${theme_name} 已设为默认"
     return 0
 }
 
-if ! install_custom_theme; then
-    echo "警告：自定义主题安装失败，回退到内置主题 ${FALLBACK_THEME}。"
+# 写入主题自动更新脚本
+cat > /usr/local/bin/lyys-plymouth-theme-update.sh <<'THEME_UPDATE_EOF'
+#!/bin/bash
+REPO="https://github.com/Zecheng-6114/lyys-plymouthd-theme.git"
+CACHE="/var/cache/lyys-plymouth-theme"
+
+install_from_cache() {
+    local theme_plymouth theme_name
+    theme_plymouth=$(ls "$CACHE"/*.plymouth 2>/dev/null | head -n1)
+    [ -n "$theme_plymouth" ] || return 1
+    theme_name=$(basename "$theme_plymouth" .plymouth)
+
+    install -d "/usr/share/plymouth/themes/${theme_name}" || return 1
+    cp -r "$CACHE"/. "/usr/share/plymouth/themes/${theme_name}/" || return 1
+    plymouth-set-default-theme "$theme_name" || return 1
+    mkinitcpio -P
+    return 0
+}
+
+if [ -d "$CACHE/.git" ]; then
+    LOCAL_HASH=$(git -C "$CACHE" rev-parse HEAD)
+    REMOTE_HASH=$(git ls-remote "$REPO" HEAD | cut -f1)
+    if [ -z "$REMOTE_HASH" ]; then
+        echo "无法获取远程版本，跳过更新"
+        exit 0
+    fi
+    if [ "$LOCAL_HASH" = "$REMOTE_HASH" ]; then
+        echo "主题已是最新"
+        exit 0
+    fi
+    echo "发现新版本，正在更新..."
+    git -C "$CACHE" pull --ff-only || {
+        echo "拉取失败，重新克隆..."
+        rm -rf "$CACHE"
+        git clone --depth 1 "$REPO" "$CACHE" || exit 1
+    }
+else
+    echo "首次下载主题..."
+    rm -rf "$CACHE"
+    git clone --depth 1 "$REPO" "$CACHE" || exit 1
+fi
+
+install_from_cache && echo "主题更新完成" || echo "主题安装失败"
+THEME_UPDATE_EOF
+chmod +x /usr/local/bin/lyys-plymouth-theme-update.sh
+
+# 写入 systemd 定时更新服务
+cat > /etc/systemd/system/lyys-plymouth-theme-update.service <<'SERVICE_EOF'
+[Unit]
+Description=Update Plymouth theme from remote
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/lyys-plymouth-theme-update.sh
+SERVICE_EOF
+
+cat > /etc/systemd/system/lyys-plymouth-theme-update.timer <<'TIMER_EOF'
+[Unit]
+Description=Check Plymouth theme updates daily
+
+[Timer]
+OnBootSec=10min
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+TIMER_EOF
+
+# 首次安装：克隆到缓存目录，然后安装
+rm -rf "$THEME_CACHE"
+if git clone --depth 1 "$PLYMOUTH_THEME_REPO" "$THEME_CACHE"; then
+    if ! install_theme_from_cache; then
+        echo "警告：自定义主题安装失败，回退到内置主题 ${FALLBACK_THEME}。"
+        plymouth-set-default-theme "$FALLBACK_THEME" || echo "警告：回退主题设置失败，将使用 Plymouth 默认主题。"
+    fi
+else
+    echo "警告：克隆主题仓库失败，回退到内置主题 ${FALLBACK_THEME}。"
     plymouth-set-default-theme "$FALLBACK_THEME" || echo "警告：回退主题设置失败，将使用 Plymouth 默认主题。"
 fi
-rm -rf "$THEME_SRC"
+
+systemctl enable lyys-plymouth-theme-update.timer
 
 mkinitcpio -P
 
