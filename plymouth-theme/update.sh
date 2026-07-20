@@ -1,4 +1,22 @@
 #!/bin/bash
+SELF="/usr/local/bin/plymouth-theme-update.sh"
+REMOTE_URL="https://raw.githubusercontent.com/Zecheng-6114/lyys_arch_install/main/plymouth-theme/update.sh"
+
+self_update() {
+    local tmp
+    tmp=$(mktemp)
+    if curl -fsSL "$REMOTE_URL" -o "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
+        if ! cmp -s "$tmp" "$SELF"; then
+            cp "$tmp" "$SELF"
+            chmod +x "$SELF"
+            echo "脚本已自更新"
+        fi
+    fi
+    rm -f "$tmp"
+}
+
+self_update
+
 REPO="https://github.com/Zecheng-6114/lyys-plymouthd-theme.git"
 CACHE="/var/cache/lyys-plymouth-theme"
 
