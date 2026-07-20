@@ -1,0 +1,6 @@
+[Unit]
+Description=Update Plymouth theme from remote
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/plymouth-theme-update.sh

@@ -1,0 +1,10 @@
+[Unit]
+Description=Check Plymouth theme updates daily
+
+[Timer]
+OnBootSec=10min
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target
