@@ -2,8 +2,6 @@
 set -Eeo pipefail
 trap 'echo "错误：步骤失败（行 ${LINENO}）：${BASH_COMMAND}" >&2; exit 1' ERR
 
-REPO_URL="https://github.com/Zecheng-6114/lyys_arch_install.git"
-
 # ===== 工具函数 =====
 
 prompt_password() {
@@ -343,25 +341,26 @@ echo ">>> 写入配置变量文件..."
 chmod 600 /mnt/root/config.env
 
 echo ">>> 下载配置脚本..."
-REPO_TMP="/tmp/lyys_arch_install"
-rm -rf "$REPO_TMP"
-git clone --depth 1 "$REPO_URL" "$REPO_TMP"
+RAW_BASE="https://raw.githubusercontent.com/Zecheng-6114/lyys_arch_install/main"
 
-cp "$REPO_TMP/config.sh" /mnt/root/config.sh
+download() {
+    curl -fsSL "${RAW_BASE}/$1" -o "$2" || { echo "错误：下载失败 $1"; exit 1; }
+}
+
+install -d /mnt/root /mnt/usr/local/bin /mnt/etc/systemd/system
+
+download config.sh /mnt/root/config.sh
 chmod +x /mnt/root/config.sh
 
-install -d /mnt/usr/local/bin
-cp "$REPO_TMP/github520/update.sh" /mnt/usr/local/bin/github520-update.sh
-cp "$REPO_TMP/plymouth-theme/update.sh" /mnt/usr/local/bin/plymouth-theme-update.sh
+download github520/update.sh /mnt/usr/local/bin/github520-update.sh
+download plymouth-theme/update.sh /mnt/usr/local/bin/plymouth-theme-update.sh
 chmod +x /mnt/usr/local/bin/github520-update.sh /mnt/usr/local/bin/plymouth-theme-update.sh
 
-install -d /mnt/etc/systemd/system
-cp "$REPO_TMP/github520/update.service" /mnt/etc/systemd/system/github520-update.service
-cp "$REPO_TMP/github520/update.timer" /mnt/etc/systemd/system/github520-update.timer
-cp "$REPO_TMP/plymouth-theme/update.service" /mnt/etc/systemd/system/plymouth-theme-update.service
-cp "$REPO_TMP/plymouth-theme/update.timer" /mnt/etc/systemd/system/plymouth-theme-update.timer
+download github520/update.service /mnt/etc/systemd/system/github520-update.service
+download github520/update.timer /mnt/etc/systemd/system/github520-update.timer
+download plymouth-theme/update.service /mnt/etc/systemd/system/plymouth-theme-update.service
+download plymouth-theme/update.timer /mnt/etc/systemd/system/plymouth-theme-update.timer
 
-rm -rf "$REPO_TMP"
 echo "配置脚本下载完成"
 
 echo ">>> 进入 chroot 环境执行配置..."
