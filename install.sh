@@ -2,6 +2,36 @@
 set -Eeo pipefail
 trap 'echo "错误：步骤失败（行 ${LINENO}）：${BASH_COMMAND}" >&2; exit 1' ERR
 
+# ===== 工具函数 =====
+
+prompt_password() {
+    local var_name="$1" prompt="$2"
+    while true; do
+        read -s -p "$prompt: " "${var_name}" < /dev/tty; echo
+        read -s -p "确认${prompt}: " "${var_name}_CONFIRM" < /dev/tty; echo
+        if [ -z "${!var_name}" ]; then
+            echo "密码不能为空，请重新输入。"
+        elif [ "${!var_name}" != "${!var_name}_CONFIRM" ]; then
+            echo "两次输入不一致，请重新输入。"
+        else
+            break
+        fi
+    done
+}
+
+check_partitions() {
+    local missing=0
+    for part in "$@"; do
+        if [ -b "$part" ]; then
+            echo "分区存在: $part"
+        else
+            echo "错误：分区不存在 $part"
+            missing=1
+        fi
+    done
+    [ $missing -eq 0 ]
+}
+
 # ===== Root 权限检查 =====
 if [ "$(id -u)" -ne 0 ]; then
     echo "错误：请使用 root 权限运行此脚本" >&2
@@ -52,7 +82,6 @@ if [ -n "$MISSING_TOOLS" ]; then
         echo "错误：未找到 pacman，无法自动安装，请手动安装后重试。"
         exit 1
     fi
-    echo ""
     read -p "是否现在用 pacman 安装这些软件包？[y/N]: " INSTALL_DEPS < /dev/tty
     if [[ "$INSTALL_DEPS" =~ ^[Yy]$ ]]; then
         pacman -Sy --needed --noconfirm $MISSING_PKGS
@@ -70,7 +99,7 @@ if [ -n "$MISSING_TOOLS" ]; then
 fi
 echo "依赖工具检查通过"
 
-# ===== 配置变量（交互式输入，回车使用默认值） =====
+# ===== 配置变量 =====
 echo ">>> 检测可用磁盘..."
 DISK_LIST=$(timeout 10 lsblk -dpno NAME,SIZE,MODEL,TYPE 2>/dev/null)
 if [ -z "$DISK_LIST" ]; then
@@ -100,29 +129,8 @@ TIMEZONE="${TIMEZONE:-Asia/Shanghai}"
 read -p "语言环境 [默认 zh_CN.UTF-8]: " LOCALE < /dev/tty
 LOCALE="${LOCALE:-zh_CN.UTF-8}"
 
-while true; do
-    read -s -p "root 密码: " ROOT_PASSWORD < /dev/tty; echo
-    read -s -p "确认 root 密码: " ROOT_PASSWORD_CONFIRM < /dev/tty; echo
-    if [ -z "$ROOT_PASSWORD" ]; then
-        echo "密码不能为空，请重新输入。"
-    elif [ "$ROOT_PASSWORD" != "$ROOT_PASSWORD_CONFIRM" ]; then
-        echo "两次输入不一致，请重新输入。"
-    else
-        break
-    fi
-done
-
-while true; do
-    read -s -p "用户 ${USERNAME} 密码: " USER_PASSWORD < /dev/tty; echo
-    read -s -p "确认用户密码: " USER_PASSWORD_CONFIRM < /dev/tty; echo
-    if [ -z "$USER_PASSWORD" ]; then
-        echo "密码不能为空，请重新输入。"
-    elif [ "$USER_PASSWORD" != "$USER_PASSWORD_CONFIRM" ]; then
-        echo "两次输入不一致，请重新输入。"
-    else
-        break
-    fi
-done
+prompt_password ROOT_PASSWORD "root 密码"
+prompt_password USER_PASSWORD "用户 ${USERNAME} 密码"
 
 if [ ! -b "$DISK" ]; then
     echo "错误：磁盘 $DISK 不存在。"
@@ -169,9 +177,7 @@ else
     SWAP_MIB=16384
 fi
 
-MAX_SWAP_MIB=16384
-[ $SWAP_MIB -gt $MAX_SWAP_MIB ] && SWAP_MIB=$MAX_SWAP_MIB
-
+[ $SWAP_MIB -gt 16384 ] && SWAP_MIB=16384
 echo "内存: ${TOTAL_MEM_MIB} MiB -> Swap: ${SWAP_MIB} MiB"
 
 # ===== 按磁盘大小配比 Root 分区 =====
@@ -179,23 +185,18 @@ DISK_BYTES=$(lsblk -bdno SIZE "$DISK")
 DISK_MIB=$((DISK_BYTES / 1024 / 1024))
 EFI_MIB=1024
 
-# Root 取磁盘 25%，并限制在 [30G, 150G] 区间
 ROOT_MIB=$((DISK_MIB / 4))
-MIN_ROOT_MIB=30720
-MAX_ROOT_MIB=153600
-[ $ROOT_MIB -lt $MIN_ROOT_MIB ] && ROOT_MIB=$MIN_ROOT_MIB
-[ $ROOT_MIB -gt $MAX_ROOT_MIB ] && ROOT_MIB=$MAX_ROOT_MIB
+[ $ROOT_MIB -lt 30720 ] && ROOT_MIB=30720
+[ $ROOT_MIB -gt 153600 ] && ROOT_MIB=153600
 
-# 校验磁盘容量：EFI + Swap + Root 之外至少给 Home 预留 5G
 NEED_MIB=$((EFI_MIB + SWAP_MIB + ROOT_MIB + 5120))
 if [ $DISK_MIB -lt $NEED_MIB ]; then
     echo "错误：磁盘容量不足（${DISK_MIB} MiB），至少需要 ${NEED_MIB} MiB。"
     exit 1
 fi
-
 echo "磁盘: ${DISK_MIB} MiB -> Root: ${ROOT_MIB} MiB, Home: 剩余空间"
 
-# ---- 分区前缀判断（修复） ----
+# ===== 分区命名 =====
 if [[ "${DISK: -1}" =~ [0-9] ]]; then
     PART_PREFIX="${DISK}p"
 else
@@ -220,114 +221,48 @@ if [[ "$confirm" != "yes" ]]; then
     exit 0
 fi
 
-# ===== 主动预防：卸载可能残留的旧挂载 =====
+# ===== 清理旧挂载 =====
 echo ">>> 清理旧的挂载和 Swap 激活..."
 umount -R /mnt 2>/dev/null || true
 swapoff "${PART_SWAP}" 2>/dev/null || true
-echo "清理完成"
 
-# ===== 时钟 =====
+# ===== 同步时钟 =====
 echo ">>> 同步系统时钟..."
 timedatectl set-ntp true
-echo "时钟同步完成"
 
 # ===== 分区与格式化 =====
 if [[ "$INSTALL_MODE" == "full" ]]; then
-    echo ">>> 清除旧分区表..."
+    echo ">>> 创建分区..."
     sgdisk -Z "$DISK"
-    echo "分区表已清除"
-
-    echo ">>> 创建 EFI 分区 (${EFI_MIB}M)..."
     sgdisk -n 1::+${EFI_MIB}M -t 1:ef00 -c 1:"EFI" "$DISK"
-    echo "EFI 分区已创建"
-
-    echo ">>> 创建 Swap 分区 (${SWAP_MIB}M)..."
     sgdisk -n 2::+${SWAP_MIB}M -t 2:8200 -c 2:"SWAP" "$DISK"
-    echo "Swap 分区已创建"
-
-    echo ">>> 创建 Root 分区 (${ROOT_MIB}M)..."
     sgdisk -n 3::+${ROOT_MIB}M -t 3:8300 -c 3:"ROOT" "$DISK"
-    echo "Root 分区已创建"
-
-    echo ">>> 创建 Home 分区 (剩余空间)..."
     sgdisk -n 4:0:0 -t 4:8300 -c 4:"HOME" "$DISK"
-    echo "Home 分区已创建"
-
-    echo ">>> 格式化 EFI..."
-    mkfs.fat -F32 "$PART_EFI"
-    echo "EFI 格式化完成"
-
-    echo ">>> 格式化 Swap..."
-    mkswap "$PART_SWAP"
-    echo "Swap 格式化完成"
-
-    echo ">>> 格式化 Root..."
-    mkfs.ext4 -F "$PART_ROOT"
-    echo "Root 格式化完成"
-
-    echo ">>> 格式化 Home..."
-    mkfs.xfs -f "$PART_HOME"
-    echo "Home 格式化完成"
+    echo "分区创建完成"
 else
     echo ">>> 检查现有分区..."
-    if [ -b "$PART_EFI" ]; then
-        echo "EFI 分区存在: $PART_EFI"
-    else
-        echo "错误：EFI 分区不存在"
-        exit 1
-    fi
-    if [ -b "$PART_SWAP" ]; then
-        echo "Swap 分区存在: $PART_SWAP"
-    else
-        echo "错误：Swap 分区不存在"
-        exit 1
-    fi
-    if [ -b "$PART_ROOT" ]; then
-        echo "Root 分区存在: $PART_ROOT"
-    else
-        echo "错误：Root 分区不存在"
-        exit 1
-    fi
-    if [ -b "$PART_HOME" ]; then
-        echo "Home 分区存在: $PART_HOME"
-    else
-        echo "错误：Home 分区不存在"
-        exit 1
-    fi
-
-    echo ">>> 格式化 EFI..."
-    mkfs.fat -F32 "$PART_EFI"
-    echo "EFI 格式化完成"
-
-    echo ">>> 格式化 Swap..."
-    mkswap "$PART_SWAP"
-    echo "Swap 格式化完成"
-
-    echo ">>> 格式化 Root..."
-    mkfs.ext4 -F "$PART_ROOT"
-    echo "Root 格式化完成"
+    check_partitions "$PART_EFI" "$PART_SWAP" "$PART_ROOT" "$PART_HOME"
 fi
 
+echo ">>> 格式化分区..."
+mkfs.fat -F32 "$PART_EFI"
+mkswap "$PART_SWAP"
+mkfs.ext4 -F "$PART_ROOT"
+if [[ "$INSTALL_MODE" == "full" ]]; then
+    mkfs.xfs -f "$PART_HOME"
+fi
+echo "格式化完成"
+
 # ===== 挂载 =====
-echo ">>> 挂载 Root 到 /mnt..."
+echo ">>> 挂载分区..."
 mount "$PART_ROOT" /mnt
-echo "Root 已挂载"
-
-echo ">>> 创建挂载点..."
 mkdir -p /mnt/boot /mnt/home
-echo "挂载点已创建"
-
-echo ">>> 挂载 EFI 到 /mnt/boot..."
 mount "$PART_EFI" /mnt/boot
-echo "EFI 已挂载"
-
-echo ">>> 激活 Swap..."
 swapon "$PART_SWAP"
-echo "Swap 已激活"
-
-echo ">>> 挂载 Home 到 /mnt/home..."
-mount "$PART_HOME" /mnt/home
-echo "Home 已挂载"
+if [[ "$INSTALL_MODE" == "full" ]]; then
+    mount "$PART_HOME" /mnt/home
+fi
+echo "挂载完成"
 
 # ===== 镜像源 =====
 echo ">>> 使用 reflector 更新镜像源（按速度排序）..."
@@ -393,9 +328,8 @@ echo "基础系统安装完成"
 # ===== fstab =====
 echo ">>> 生成 fstab..."
 genfstab -U /mnt > /mnt/etc/fstab
-echo "fstab 生成完成"
 
-# ===== chroot 配置脚本 =====
+# ===== chroot 配置 =====
 echo ">>> 写入配置变量文件..."
 {
     printf 'TIMEZONE=%q\n' "$TIMEZONE"
@@ -404,7 +338,6 @@ echo ">>> 写入配置变量文件..."
     printf 'USERNAME=%q\n' "$USERNAME"
 } > /mnt/root/config.env
 chmod 600 /mnt/root/config.env
-echo "配置变量文件已写入"
 
 echo ">>> 准备 chroot 配置脚本..."
 cat <<'INNER_EOF' > /mnt/root/config.sh
@@ -417,18 +350,19 @@ source /root/config.env
 IFS= read -r ROOT_PASSWORD
 IFS= read -r USER_PASSWORD
 
+# --- 时区 ---
 echo ">>> 配置时区..."
 ln -sf "/usr/share/zoneinfo/${TIMEZONE}" /etc/localtime
 hwclock --systohc
-echo "时区配置完成"
 
+# --- 语言环境 ---
 echo ">>> 配置语言环境..."
 sed -i '/en_US.UTF-8/s/^#//' /etc/locale.gen
 sed -i "\|${LOCALE}|s/^#//" /etc/locale.gen
 locale-gen
 echo "LANG=${LOCALE}" > /etc/locale.conf
-echo "语言环境配置完成"
 
+# --- 主机名 ---
 echo ">>> 配置主机名..."
 echo "${HOSTNAME}" > /etc/hostname
 cat > /etc/hosts <<HOSTFILE
@@ -436,8 +370,8 @@ cat > /etc/hosts <<HOSTFILE
 ::1         localhost
 127.0.1.1   ${HOSTNAME}.localdomain ${HOSTNAME}
 HOSTFILE
-echo "主机名配置完成"
 
+# --- archlinuxcn 软件源 ---
 echo ">>> 配置 archlinuxcn 软件源..."
 cat >> /etc/pacman.conf <<'CNREPO'
 
@@ -445,8 +379,8 @@ cat >> /etc/pacman.conf <<'CNREPO'
 Server = https://mirrors.zju.edu.cn/archlinuxcn/$arch
 CNREPO
 pacman -Sy --noconfirm archlinux-keyring archlinuxcn-keyring
-echo "archlinuxcn 软件源配置完成"
 
+# --- GitHub520 hosts 自动更新 ---
 echo ">>> 配置 GitHub520 hosts 自动更新..."
 cat > /usr/local/bin/github520-update.sh <<'UPDATE_EOF'
 #!/bin/bash
@@ -479,16 +413,12 @@ Persistent=true
 WantedBy=timers.target
 TIMER_EOF
 
-echo ">>> 首次运行 GitHub520 更新..."
 /usr/local/bin/github520-update.sh || echo "警告：GitHub520 首次更新失败，将在系统启动后由 timer 自动重试"
-
-echo ">>> 启用 GitHub520 定时更新..."
 systemctl enable github520-update.timer
-echo "GitHub520 定时更新已启用"
 
+# --- 密码与用户 ---
 echo ">>> 设置 root 密码..."
 printf '%s\n' "root:${ROOT_PASSWORD}" | chpasswd
-echo "root 密码设置完成"
 
 echo ">>> 创建用户 ${USERNAME}..."
 if [ -d "/home/${USERNAME}" ]; then
@@ -501,29 +431,25 @@ else
     useradd -m -G wheel -s /bin/bash "${USERNAME}"
 fi
 printf '%s\n' "${USERNAME}:${USER_PASSWORD}" | chpasswd
-echo "用户 ${USERNAME} 创建完成"
 
+# --- 用户配置 ---
 echo ">>> 配置登录时运行 fastfetch..."
 USER_BASHRC="/home/${USERNAME}/.bashrc"
 if ! grep -qx 'fastfetch' "$USER_BASHRC" 2>/dev/null; then
     echo 'fastfetch' >> "$USER_BASHRC"
 fi
 chown "${USERNAME}:${USERNAME}" "$USER_BASHRC"
-echo "fastfetch 已配置"
 
 echo ">>> 配置 sudo 权限..."
 echo '%wheel ALL=(ALL:ALL) ALL' > /etc/sudoers.d/99-wheel
 chmod 440 /etc/sudoers.d/99-wheel
-echo "sudo 权限配置完成"
 
-echo ">>> 启用 NetworkManager..."
+# --- 系统服务 ---
+echo ">>> 启用系统服务..."
 systemctl enable NetworkManager
-echo "NetworkManager 已启用"
-
-echo ">>> 启用 SSH 服务..."
 systemctl enable sshd
-echo "SSH 服务已启用"
 
+# --- Plymouth ---
 echo ">>> 配置 Plymouth 启动动画..."
 if grep -q '\bplymouth\b' /etc/mkinitcpio.conf; then
     :
@@ -537,6 +463,7 @@ else
     echo "错误：无法在 mkinitcpio.conf 中定位 HOOKS 行以添加 plymouth。"
     exit 1
 fi
+
 if ! grep -q 'splash' /etc/default/grub; then
     sed -i '/^GRUB_CMDLINE_LINUX_DEFAULT=/s/"\(.*\)"/"\1 splash"/' /etc/default/grub
 fi
@@ -574,17 +501,15 @@ install_custom_theme() {
     return 0
 }
 
-if install_custom_theme; then
-    :
-else
+if ! install_custom_theme; then
     echo "警告：自定义主题安装失败，回退到内置主题 ${FALLBACK_THEME}。"
     plymouth-set-default-theme "$FALLBACK_THEME" || echo "警告：回退主题设置失败，将使用 Plymouth 默认主题。"
 fi
 rm -rf "$THEME_SRC"
 
 mkinitcpio -P
-echo "Plymouth 配置完成"
 
+# --- GRUB ---
 echo ">>> 安装 GRUB 引导..."
 grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id="GRUB"
 
@@ -612,27 +537,22 @@ fi
 rm -rf "$GRUB_THEME_SRC"
 
 grub-mkconfig -o /boot/grub/grub.cfg
-echo "GRUB 安装完成"
 
+# --- AUR 助手 ---
 echo ">>> 安装 paru (AUR 助手)..."
 pacman -S --noconfirm paru
-echo "paru 安装完成"
 INNER_EOF
 
 echo ">>> 进入 chroot 环境执行配置..."
 printf '%s\n%s\n' "$ROOT_PASSWORD" "$USER_PASSWORD" | arch-chroot /mnt bash /root/config.sh
-echo "chroot 配置完成"
 
+# ===== 清理与卸载 =====
 echo ">>> 清理临时脚本..."
 rm /mnt/root/config.sh /mnt/root/config.env
-echo "临时脚本已清理"
 
-# ===== 卸载 =====
 echo ">>> 卸载分区..."
 swapoff "$PART_SWAP"
-echo "Swap 已关闭"
 umount -R /mnt
-echo "分区已卸载"
 
 echo "=========================================="
 if [[ "$INSTALL_MODE" == "full" ]]; then
