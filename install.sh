@@ -123,9 +123,9 @@ cat >> /etc/pacman.conf <<'CNREPO'
 
 [archlinuxcn]
 Server = https://mirrors.zju.edu.cn/archlinuxcn/\$arch
-SigLevel = Never
 CNREPO
-pacman -Sy --noconfirm archlinuxcn-keyring paru
+pacman -Sy --noconfirm archlinuxcn-keyring
+pacman -S --noconfirm paru
 grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
 grub-mkconfig -o /boot/grub/grub.cfg
 EOF
