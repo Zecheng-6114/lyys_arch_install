@@ -123,7 +123,7 @@ if command -v aria2c >/dev/null 2>&1; then
 else
     read -p "$(echo -e "  ${BOLD}?${NC} 是否安装 aria2 以启用多线程下载加速？[y/N]: ")" INSTALL_ARIA2 < /dev/tty
     if [[ "$INSTALL_ARIA2" =~ ^[Yy]$ ]] && command -v pacman >/dev/null 2>&1; then
-        pacman -S --noconfirm aria2 && USE_ARIA2=true
+        pacman -Sy --noconfirm aria2 && USE_ARIA2=true
     fi
 fi
 if $USE_ARIA2; then
