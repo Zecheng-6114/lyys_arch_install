@@ -1,8 +1,0 @@
-[Unit]
-Description=Update GitHub520 hosts
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/github520-update.sh
