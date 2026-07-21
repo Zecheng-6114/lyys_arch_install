@@ -32,16 +32,17 @@ done
 # 分区
 [[ "${DISK: -1}" =~ [0-9] ]] && P="${DISK}p" || P="$DISK"
 
-MEM_MIB=$(awk '/MemTotal/{$2=int($2/1024); print $2}' /proc/meminfo)
-(( SWAP = MEM_MIB <= 2048 ? MEM_MIB*2 : MEM_MIB <= 8192 ? MEM_MIB : MEM_MIB <= 65536 ? MEM_MIB*3/4 : 16384 ))
-(( SWAP > 16384 )) && SWAP=16384
+MEM_GIB=$(awk '/MemTotal/{$2=int($2/1024/1024); print $2}' /proc/meminfo)
+(( SWAP_GIB = MEM_GIB <= 2 ? MEM_GIB*2 : MEM_GIB <= 8 ? MEM_GIB : MEM_GIB <= 64 ? (MEM_GIB*3+3)/4 : 16 ))
+(( SWAP_GIB > 16 )) && SWAP_GIB=16
+(( SWAP = SWAP_GIB * 1024 ))
 
 DISK_MIB=$(($(lsblk -bdno SIZE "$DISK") / 1048576))
 (( ROOT = DISK_MIB / 4 ))
 (( ROOT < 30720 ))  && ROOT=30720
 (( ROOT > 153600 )) && ROOT=153600
 
-echo "EFI=1024M  Swap=${SWAP}M  Root=${ROOT}M  Home=剩余"
+echo "EFI=1024M  Swap=${SWAP_GIB}G  Root=${ROOT}M  Home=剩余"
 read -p "输入 yes 确认执行: " confirm < /dev/tty
 [[ "$confirm" != "yes" ]] && exit 0
 
